@@ -116,6 +116,7 @@ public:
     handler_channel,
     handler_interval,
     handler_subscriptions,
+    handler_debug,
   };
 
   // Rx-stats about stations
@@ -145,6 +146,8 @@ public:
   int _interval_ms; // Beacon interval: common between all VAPs for now
   int _channel; // Channel to be shared by all VAPs.
   Vector<Subscription> _subscription_list;
+  bool _debug;
+
 private:
   void compute_bssid_mask ();
   void match_against_subscriptions(StationStats stats, EtherAddress src);
@@ -156,7 +159,6 @@ private:
   int _associd;
   Timer _timer;
   IPAddress _default_gw_addr;
-  
 };
 
 

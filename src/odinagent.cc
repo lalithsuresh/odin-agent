@@ -31,6 +31,7 @@ CLICK_DECLS
 OdinAgent::OdinAgent()
 : _rtable(0),
   _associd(0),
+  _debug(false),
   _timer(this)
 {
 }
@@ -74,17 +75,17 @@ OdinAgent::run_timer (Timer*)
 int
 OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
 { 
-    _interval_ms = 5000;
-    _channel = 6;
-    if (Args(conf, this, errh)
-    .read_mp("HWADDR", _hw_mac_addr)
-    .read_m("RT", ElementCastArg("AvailableRates"), _rtable)
-    .read_m("CHANNEL", _channel)
-    .read_m("DEFAULT_GW", _default_gw_addr)
-    .complete() < 0)
-    return -1;
-    
-    return 0;
+  _interval_ms = 5000;
+  _channel = 6;
+  if (Args(conf, this, errh)
+  .read_mp("HWADDR", _hw_mac_addr)
+  .read_m("RT", ElementCastArg("AvailableRates"), _rtable)
+  .read_m("CHANNEL", _channel)
+  .read_m("DEFAULT_GW", _default_gw_addr)
+  .complete() < 0)
+  return -1;
+  
+  return 0;
 }
 
 
@@ -190,6 +191,13 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 int
 OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, String vap_ssid)
 {
+  if (_debug) {
+    fprintf(stderr, "set_vap (%s, %s, %s, %s)\n", sta_mac.unparse_colon().c_str()
+                                                , sta_ip.unparse().c_str()
+                                                , sta_bssid.unparse().c_str()
+                                                , vap_ssid.c_str());
+  }
+
   // First make sure that this VAP isn't here already, in which
   // case we'll just ignore the request
   if (_sta_mapping_table.find(sta_mac) == _sta_mapping_table.end())
@@ -222,6 +230,10 @@ OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 int
 OdinAgent::remove_vap (EtherAddress sta_mac)
 {
+  if (_debug) {
+    fprintf(stderr, "remove_vap (%s)\n", sta_mac.unparse_colon().c_str());
+  }
+
   HashTable<EtherAddress, OdinStationState>::iterator it = _sta_mapping_table.find (sta_mac);
       
   // VAP doesn't exist on this node. Ignore.
@@ -1137,7 +1149,6 @@ OdinAgent::read_handler(Element *e, void *user_data)
     case handler_rxstat: {
       Timestamp now = Timestamp::now();
 
-      StringAccum sa;
       for (HashTable<EtherAddress, StationStats>::const_iterator iter = agent->_rx_stats.begin();
            iter.live(); iter++) {
 
@@ -1160,10 +1171,11 @@ OdinAgent::read_handler(Element *e, void *user_data)
         sa << " packets:" << n._packets;
         sa << " last_received:" << age << "\n";
       }
-      return sa.take_string();
+
+      break;
     }
     case handler_subscriptions: {
-      StringAccum sa;
+
       for (Vector<OdinAgent::Subscription>::const_iterator iter = agent->_subscription_list.begin();
            iter != agent->_subscription_list.end(); iter++) {
         
@@ -1176,7 +1188,11 @@ OdinAgent::read_handler(Element *e, void *user_data)
         sa << "\n";
       }
 
-      return sa.take_string();
+      break;
+    }
+    case handler_debug: {
+      sa << agent->_debug << "\n";
+      break;
     }
   }
 
@@ -1209,6 +1225,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           {
             return -1;
           }
+      break;
     }
     case handler_set_vap:{
       IPAddress sta_ip;
@@ -1229,6 +1246,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           {
             return -1;
           }
+      break;
     }
     case handler_remove_vap:{
       EtherAddress sta_mac;
@@ -1243,6 +1261,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
         {
           return -1;
         }
+      break;
     }
     case handler_channel: {
       int channel;
@@ -1307,6 +1326,14 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       }
       break;
     }
+    case handler_debug: {
+      bool debug;
+      if (!BoolArg().parse(str, debug))
+        return -1;
+      
+      agent->_debug = debug;
+      break;
+    }
   }
   return 0;
 }
@@ -1314,18 +1341,20 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
 void
 OdinAgent::add_handlers()
 {
-    add_read_handler("table", read_handler, handler_view_mapping_table);
-    add_read_handler("channel", read_handler, handler_channel);
-    add_read_handler("interval", read_handler, handler_interval);
-    add_read_handler("rxstats", read_handler, handler_rxstat);
-    add_read_handler("subscriptions", read_handler, handler_subscriptions);
+  add_read_handler("table", read_handler, handler_view_mapping_table);
+  add_read_handler("channel", read_handler, handler_channel);
+  add_read_handler("interval", read_handler, handler_interval);
+  add_read_handler("rxstats", read_handler, handler_rxstat);
+  add_read_handler("subscriptions", read_handler, handler_subscriptions);
+  add_read_handler("debug", read_handler, handler_debug);
 
-    add_write_handler("add_vap", write_handler, handler_add_vap);
-    add_write_handler("set_vap", write_handler, handler_set_vap);
-    add_write_handler("remove_vap", write_handler, handler_remove_vap);
-    add_write_handler("channel", write_handler, handler_channel);
-    add_write_handler("interval", write_handler, handler_interval);
-    add_write_handler("subscriptions", write_handler, handler_subscriptions);
+  add_write_handler("add_vap", write_handler, handler_add_vap);
+  add_write_handler("set_vap", write_handler, handler_set_vap);
+  add_write_handler("remove_vap", write_handler, handler_remove_vap);
+  add_write_handler("channel", write_handler, handler_channel);
+  add_write_handler("interval", write_handler, handler_interval);
+  add_write_handler("subscriptions", write_handler, handler_subscriptions);
+  add_write_handler("debug", write_handler, handler_debug);
 }
 
 CLICK_ENDDECLS
