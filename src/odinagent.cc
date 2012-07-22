@@ -28,12 +28,16 @@
 
 CLICK_DECLS
 
+
+void cleanup_lvap (Timer *timer, void *);
+
 OdinAgent::OdinAgent()
 : _rtable(0),
   _associd(0),
   _debug(false),
-  _timer(this)
+  _beacon_timer(this)
 {
+  _cleanup_timer.assign (&cleanup_lvap, (void *) this);
 }
 
 OdinAgent::~OdinAgent()
@@ -43,7 +47,9 @@ OdinAgent::~OdinAgent()
 int
 OdinAgent::initialize(ErrorHandler*)
 {
-  _timer.initialize(this);
+  _beacon_timer.initialize(this);
+  _cleanup_timer.initialize(this);
+  _cleanup_timer.schedule_now();
   compute_bssid_mask ();
   return 0;
 }
@@ -62,10 +68,8 @@ OdinAgent::run_timer (Timer*)
       // prevent clients from seeing each others VAPs
       send_beacon (it.key(), it.value()._vap_bssid, it.value()._vap_ssid, false);
    }
-
-   // This time slices beacon generation over the interval period. As a thumb rule,
-   // it is best to have the beacon interval > #VAPs
-   _timer.reschedule_after_msec(_interval_ms);
+   
+   _beacon_timer.reschedule_after_msec(_interval_ms);
 }
 
 
@@ -163,7 +167,7 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 
   // Start beacon generation
   if (_sta_mapping_table.size() == 1) {
-      _timer.schedule_now();
+      _beacon_timer.schedule_now();
   }
 
   // In case this invocation is in response to a page-faulted-probe-request,
@@ -253,11 +257,12 @@ OdinAgent::remove_vap (EtherAddress sta_mac)
   // Stop beacon generator if this was the last
   // LVAP
   if (_sta_mapping_table.size() == 0) {
-    _timer.unschedule();
+    _beacon_timer.unschedule();
   }
 
   return 0;
 } 
+
 
 /** 
  * Handle a probe request. This code is
@@ -1338,6 +1343,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
   return 0;
 }
 
+
 void
 OdinAgent::add_handlers()
 {
@@ -1356,6 +1362,37 @@ OdinAgent::add_handlers()
   add_write_handler("subscriptions", write_handler, handler_subscriptions);
   add_write_handler("debug", write_handler, handler_debug);
 }
+
+
+void
+cleanup_lvap (Timer *timer, void *data)
+{
+  OdinAgent *agent = (OdinAgent *) data;
+
+  Vector<EtherAddress> buf;
+
+  // Clear out old rxstat entries.
+  for (HashTable<EtherAddress, OdinAgent::StationStats>::const_iterator iter = agent->_rx_stats.begin();
+        iter.live(); iter++)
+  {
+    Timestamp now = Timestamp::now();
+    Timestamp age = now - iter.value()._last_received;
+    
+    if (age.sec() > 30)
+    {
+      buf.push_back (iter.key());
+    }
+  }
+
+  for (Vector<EtherAddress>::const_iterator iter = buf.begin(); iter != buf.end(); iter++)
+  {
+    agent->_rx_stats.erase (*iter);
+  }
+
+  timer->reschedule_after_sec(30);
+}
+
+
 
 CLICK_ENDDECLS
 EXPORT_ELEMENT(OdinAgent)

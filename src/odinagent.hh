@@ -157,7 +157,8 @@ private:
   EtherAddress _hw_mac_addr;
   class AvailableRates *_rtable;
   int _associd;
-  Timer _timer;
+  Timer _beacon_timer;
+  Timer _cleanup_timer;
   IPAddress _default_gw_addr;
 };
 
