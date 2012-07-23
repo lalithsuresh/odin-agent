@@ -147,13 +147,12 @@ public:
   int _channel; // Channel to be shared by all VAPs.
   Vector<Subscription> _subscription_list;
   bool _debug;
+  HashTable<EtherAddress, void *> _packet_buffer;
 
 private:
   void compute_bssid_mask ();
   void match_against_subscriptions(StationStats stats, EtherAddress src);
   void update_rx_stats(Packet *p);
-
-  HashTable<EtherAddress, Packet *> _packet_buffer;
   EtherAddress _hw_mac_addr;
   class AvailableRates *_rtable;
   int _associd;

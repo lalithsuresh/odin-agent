@@ -172,10 +172,8 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 
   // In case this invocation is in response to a page-faulted-probe-request,
   // then process the faulty packet
-  HashTable<EtherAddress, Packet *>::const_iterator it = _packet_buffer.find(sta_mac);
+  HashTable<EtherAddress, void *>::const_iterator it = _packet_buffer.find(sta_mac);
   if (it != _packet_buffer.end()) {
-    Packet *p = it.value ();
-    p->kill();
     _packet_buffer.erase(it.key());
     OdinStationState oss = _sta_mapping_table.get (sta_mac);
     send_beacon (sta_mac, oss._vap_bssid, oss._vap_ssid, true);
@@ -314,8 +312,8 @@ OdinAgent::recv_probe_request (Packet *p)
     String payload = sa.take_string();
     WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
     output(3).push(odin_probe_packet);
-    _packet_buffer.set (src, p);
-
+    _packet_buffer.set (src, NULL);
+    p->kill();
     return;
   }
 
@@ -1389,7 +1387,8 @@ cleanup_lvap (Timer *timer, void *data)
     agent->_rx_stats.erase (*iter);
   }
 
-  timer->reschedule_after_sec(30);
+  agent->_packet_buffer.clear();
+  timer->reschedule_after_sec(50);
 }
 
 
