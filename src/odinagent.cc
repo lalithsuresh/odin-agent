@@ -24,9 +24,92 @@
 #include <click/handlercall.hh>
 #include <clicknet/ether.h>
 #include <clicknet/llc.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/aes.h>
+#include <openssl/sha.h>
+#include <net/if.h>
 #include "odinagent.hh"
 
+
+extern "C" {
+#include <netlink/genl/genl.h>
+#include <netlink/genl/family.h>
+#include <netlink/genl/ctrl.h>
+#include "nl80211_copy.h"
+}
+
 CLICK_DECLS
+
+#define WPA_NONCE_LEN 32
+#define SHA1_SIZE 20
+#define ETH_ALEN 6
+#define HMAC_OUT_LEN  20 /* SHA1 specific */
+#define WLAN_CIPHER_SUITE_CCMP 0x000FAC04
+
+#ifndef BIT
+#define BIT(x) (1 << (x))
+#endif
+
+#define WPA_KEY_INFO_TYPE_MASK ((uint16_t) (BIT(0) | BIT(1) | BIT(2)))
+
+struct click_802_1x_header {
+  uint8_t version;
+  uint8_t type;
+  uint16_t len;
+  // followed by descriptor
+} CLICK_SIZE_PACKED_ATTRIBUTE;
+
+struct click_wpa_eapol_key_descriptor {
+  uint8_t type;
+  uint16_t key_info;
+  uint16_t key_len;
+  uint8_t replay_counter[8];
+  uint8_t key_nonce[WPA_NONCE_LEN];
+  uint8_t eapol_key_iv[16];
+  uint8_t rsc[8];
+  uint8_t key_identifier[8];
+  uint8_t key_mic[16];
+  uint16_t key_data_length;
+  // followed by key_data
+} CLICK_SIZE_PACKED_ATTRIBUTE;
+
+struct wpa_ptk {
+  uint8_t kck[16]; /* EAPOL-Key Key Confirmation Key (KCK) */
+  uint8_t kek[16]; /* EAPOL-Key Key Encryption Key (KEK) */
+  uint8_t tk1[16]; /* Temporal Key 1 (TK1) */
+  union {
+    uint8_t tk2[16]; /* Temporal Key 2 (TK2) */
+    struct {
+      uint8_t tx_mic_key[8];
+      uint8_t rx_mic_key[8];
+    } auth;
+  } u;
+} CLICK_SIZE_PACKED_ATTRIBUTE;
+
+#define nl_handle nl_sock
+
+struct nl80211_handles {
+  struct nl_handle *handle;
+  struct nl_cache *cache;
+};
+
+struct nl80211_global {
+  int if_add_ifindex;
+  struct netlink_data *netlink;
+  struct nl_cb *nl_cb;
+  struct nl80211_handles nl;
+  struct genl_family *nl80211;
+  int ioctl_sock; /* socket for ioctl() use */
+};
+
+#define FOUR_WAY_STATE_NULL 0x00
+#define FOUR_WAY_STATE_1 0x01
+#define FOUR_WAY_STATE_3 0x02
+#define FOUR_WAY_STATE_GROUP 0x03
 
 
 void cleanup_lvap (Timer *timer, void *);
@@ -156,6 +239,7 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   state._vap_bssid = sta_bssid;
   state._sta_ip_addr_v4 = sta_ip;
   state._vap_ssid = vap_ssid;
+  state.state_4way = FOUR_WAY_STATE_NULL;
   _sta_mapping_table.set(sta_mac, state);
 
   // We need to prime the ARP responders
@@ -334,6 +418,7 @@ OdinAgent::recv_probe_request (Packet *p)
 void
 OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe) {
 
+  
   Vector<int> rates = _rtable->lookup(bssid);
 
   /* order elements by standard
@@ -346,6 +431,7 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
     2 + my_ssid.length() + /* ssid */
     2 + WIFI_RATES_MAXSIZE +  /* rates */
     2 + 1 +              /* ds parms */
+    1 + 1 + 2 + 4 + 2 + 4 + 2 + 4 + 2 + /* RSN (NOTE: assumes single auth/cipher suite) */
     2 + 4 +              /* tim */
     /* 802.11g Information fields */
     2 + WIFI_RATES_MAXSIZE +  /* xrates */
@@ -393,6 +479,7 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
 
   uint16_t cap_info = 0;
   cap_info |= WIFI_CAPINFO_ESS;
+  cap_info |= WIFI_CAPINFO_PRIVACY;
   *(uint16_t *)ptr = cpu_to_le16(cap_info);
   ptr += 2;
   actual_length += 2;
@@ -426,6 +513,41 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
   ptr += 2 + 1;
   actual_length += 2 + 1;
 
+  /* RSN */
+
+  ptr[0] =  48; // tag id
+  ptr[1] =  20; // len
+  ptr += 2;
+  actual_length += 2;
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // version
+  ptr += 2;
+  actual_length += 2;
+  *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x04ac0f00); // group key suite
+  ptr += 4;
+  actual_length += 4;
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // pairwise suite count
+  ptr += 2;
+  actual_length += 2;
+
+  // NOTE: Only supports one for now
+   *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x04ac0f00); // pairwise suite list
+  ptr += 4;
+  actual_length += 4;
+
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // authentication suite count
+  ptr += 2;
+  actual_length += 2;
+
+  // NOTE: Only supports one for now
+  *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x02ac0f00); // authentication suite list
+  ptr += 4;
+  actual_length += 4;
+
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t)0x000c); // capabilities
+  ptr += 2;
+  actual_length += 2;
+
+
   /* tim */
 
   ptr[0] = WIFI_ELEMID_TIM;
@@ -458,6 +580,7 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
   }
 
   p->take(max_len - actual_length);
+
   output(0).push(p);
 }
 
@@ -535,48 +658,45 @@ OdinAgent::recv_assoc_request (Packet *p) {
     ssid = "";
   }
 
-  StringAccum sa;
+  if (_debug) {
+    StringAccum sa;
 
+    sa << "src " << src;
+    sa << " dst " << dst;
+    sa << " bssid " << bssid;
+    sa << "[ ";
+    if (capability & WIFI_CAPINFO_ESS) {
+      sa << "ESS ";
+    }
+    if (capability & WIFI_CAPINFO_IBSS) {
+      sa << "IBSS ";
+    }
+    if (capability & WIFI_CAPINFO_CF_POLLABLE) {
+      sa << "CF_POLLABLE ";
+    }
+    if (capability & WIFI_CAPINFO_CF_POLLREQ) {
+      sa << "CF_POLLREQ ";
+    }
+    if (capability & WIFI_CAPINFO_PRIVACY) {
+      sa << "PRIVACY ";
+    }
+    sa << "] ";
 
-  sa << "src " << src;
-  sa << " dst " << dst;
-  sa << " bssid " << bssid;
-  sa << "[ ";
-  if (capability & WIFI_CAPINFO_ESS) {
-    sa << "ESS ";
+    sa << " listen_int " << lint << " ";
+
+    sa << "( { ";
+    for (int x = 0; x < basic_rates.size(); x++) {
+      sa << basic_rates[x] << " ";
+    }
+    sa << "} ";
+    for (int x = 0; x < rates.size(); x++) {
+      sa << rates[x] << " ";
+    }
+
+    sa << ")\n";
+
+    fprintf(stderr, "recv_assoc_request: %s\n", sa.take_string().c_str());
   }
-  if (capability & WIFI_CAPINFO_IBSS) {
-    sa << "IBSS ";
-  }
-  if (capability & WIFI_CAPINFO_CF_POLLABLE) {
-    sa << "CF_POLLABLE ";
-  }
-  if (capability & WIFI_CAPINFO_CF_POLLREQ) {
-    sa << "CF_POLLREQ ";
-  }
-  if (capability & WIFI_CAPINFO_PRIVACY) {
-    sa << "PRIVACY ";
-  }
-  sa << "] ";
-
-  sa << " listen_int " << lint << " ";
-
-  sa << "( { ";
-  for (int x = 0; x < basic_rates.size(); x++) {
-    sa << basic_rates[x] << " ";
-  }
-  sa << "} ";
-  for (int x = 0; x < rates.size(); x++) {
-    sa << rates[x] << " ";
-  }
-
-  sa << ")\n";
-
-  // click_chatter("%{element}: request %s\n",
-  // this,
-  // sa.take_string().c_str());
-
-
 
   uint16_t associd = 0xc000 | _associd++;
 
@@ -676,8 +796,417 @@ OdinAgent::send_assoc_response (EtherAddress dst, uint16_t status, uint16_t asso
   p->take(max_len - actual_length);
 
   output(0).push(p);
+
+  _sta_mapping_table.get_pointer(dst)->state_4way = FOUR_WAY_STATE_NULL;  
+
+  /* We need both the Element and the destination
+     ether address for invoking send_wpa_eapol_start(),
+     so pack them into a HookPair struct and pass the
+     struct through the void pointer */   
+  HookPair *hp = new HookPair(this, dst);
+
+  /* Authenticator initiates EAPOL handshake */
+  Timer *t = new Timer(send_eapol_hook, (void *) hp);
+  t->initialize(this);
+  t->schedule_after_msec(2);
+
+  if (_debug) {
+    fprintf(stderr, "%s completed assocation. Initiating EAPOL\n", dst.unparse_colon().c_str());
+  }
 }
 
+void
+OdinAgent::send_wpa_eapol_key_1 (EtherAddress dst)
+{
+  if (_sta_mapping_table.get(dst).state_4way != FOUR_WAY_STATE_NULL)
+  {
+    return;
+  }
+
+  EtherAddress bssid = _sta_mapping_table.get (dst)._vap_bssid;
+
+  Vector<int> rates = _rtable->lookup(bssid);
+  int max_len = sizeof (struct click_wifi) +
+    WIFI_LLC_HEADER_LEN + 2 +
+    sizeof (struct click_802_1x_header) +
+    sizeof (struct click_wpa_eapol_key_descriptor) +
+    0;
+
+  WritablePacket *p = Packet::make(max_len);
+
+  if (p == 0)
+    return;
+
+  struct click_wifi *w = (struct click_wifi *) p->data();
+
+  w->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
+  w->i_fc[1] = 0;
+  w->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & WIFI_FC1_DIR_FROMDS);
+
+  memcpy(w->i_addr1, dst.data(), 6);
+  memcpy(w->i_addr2, bssid.data(), 6);
+  memcpy(w->i_addr3, bssid.data(), 6);
+
+
+  w->i_dur = 0;
+  w->i_seq = 0;
+
+  uint8_t *ptr = (uint8_t *) p->data() + sizeof(struct click_wifi);
+  int actual_length = sizeof(struct click_wifi);
+
+  /* LLC header */
+  memcpy(ptr, WIFI_LLC_HEADER, WIFI_LLC_HEADER_LEN);
+  ptr += WIFI_LLC_HEADER_LEN;
+  actual_length += WIFI_LLC_HEADER_LEN;
+
+  *(uint16_t *)ptr = cpu_to_le16(0x8e88); // type == 802.1X encap
+  ptr += 2;
+  actual_length += 2;
+
+  /* 802.1X Header */
+  struct click_802_1x_header *ah = (struct click_802_1x_header *) ptr;
+  ah->version = 2;
+  ah->type = 3; // Key
+  ah->len = htons (sizeof (struct click_wpa_eapol_key_descriptor));
+
+  ptr += sizeof(struct click_802_1x_header);
+  actual_length += sizeof(struct click_802_1x_header);
+
+  /* Key descriptor */
+  struct click_wpa_eapol_key_descriptor *kd = (struct click_wpa_eapol_key_descriptor *) ptr;
+  kd->type = 2;
+  kd->key_info = htons(0x008a);
+  kd->key_len = htons(16);
+
+  memset(kd->replay_counter, 0, sizeof(uint8_t) * 8);
+  kd->replay_counter[7] = 1;
+  memset(kd->key_nonce, 1, sizeof(uint8_t) * 32);
+  memset(kd->eapol_key_iv, 0, sizeof(uint8_t) * 16);
+  memset(kd->rsc, 0, sizeof(uint8_t) * 8);
+  memset(kd->key_identifier, 0, sizeof(uint8_t) * 8);
+  memset(kd->key_mic, 0, sizeof(uint8_t) * 16);
+  kd->key_data_length = 0;
+
+  actual_length += sizeof(struct click_wpa_eapol_key_descriptor);
+
+  _sta_mapping_table.get_pointer(dst)->state_4way = FOUR_WAY_STATE_1;
+  memcpy(_sta_mapping_table.get_pointer(dst)->replay_counter,
+          kd->replay_counter,
+          sizeof(uint8_t)*8);
+
+  output(0).push(p);
+
+  if (_debug) {
+    fprintf(stderr, "EAPOL msg one sent to %s\n", dst.unparse_colon().c_str());  
+  }
+}
+
+void
+OdinAgent::send_wpa_eapol_key_3 (EtherAddress dst, struct wpa_ptk *ptk, uint8_t *gtk)
+{
+  EtherAddress bssid = _sta_mapping_table.get (dst)._vap_bssid;
+
+  /* Now send msg 3/4. FIXME: MOVE TO ANOTHER FUNCTION */
+
+  Vector<int> rates = _rtable->lookup(bssid);
+  int max_len = sizeof (struct click_wifi) +
+    WIFI_LLC_HEADER_LEN + 2 +
+    sizeof (struct click_802_1x_header) +
+    sizeof (struct click_wpa_eapol_key_descriptor) +
+    56;
+
+  WritablePacket *p = Packet::make(max_len);
+
+  if (p == 0)
+    return;
+
+  struct click_wifi *w = (struct click_wifi *) p->data();
+
+  w->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
+  w->i_fc[1] = 0;
+  w->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & WIFI_FC1_DIR_FROMDS);
+
+  memcpy(w->i_addr1, dst.data(), 6);
+  memcpy(w->i_addr2, bssid.data(), 6);
+  memcpy(w->i_addr3, bssid.data(), 6);
+
+
+  w->i_dur = 0;
+  w->i_seq = 0;
+
+  uint8_t *ptr = (uint8_t *) p->data() + sizeof(struct click_wifi);
+  int actual_length = sizeof(struct click_wifi);
+
+  /* LLC header */
+  memcpy(ptr, WIFI_LLC_HEADER, WIFI_LLC_HEADER_LEN);
+  ptr += WIFI_LLC_HEADER_LEN;
+  actual_length += WIFI_LLC_HEADER_LEN;
+
+  *(uint16_t *)ptr = cpu_to_le16(0x8e88); // type == 802.1X encap
+  ptr += 2;
+  actual_length += 2;
+
+  /* 802.1X Header */
+  struct click_802_1x_header *ah = (struct click_802_1x_header *) ptr;
+  ah->version = 2;
+  ah->type = 3; // Key
+  ah->len = htons (sizeof (struct click_wpa_eapol_key_descriptor) + 56 /* key-data-lenght */);
+
+  ptr += sizeof(struct click_802_1x_header);
+  actual_length += sizeof(struct click_802_1x_header);
+
+  /* Key descriptor */
+  struct click_wpa_eapol_key_descriptor *kd = (struct click_wpa_eapol_key_descriptor *) ptr;
+  kd->type = 2;
+  kd->key_info = htons(0x13ca); //
+  kd->key_len = htons(16);
+
+  memset(kd->replay_counter, 0, sizeof(uint8_t) * 8);
+  kd->replay_counter[7] = _sta_mapping_table.get(dst).replay_counter[7] + 1;
+  memset(kd->key_nonce, 1, sizeof(uint8_t) * 32); // same as Anonce
+  memset(kd->eapol_key_iv, 0, sizeof(uint8_t) * 16); // blank again
+  memset(kd->rsc, 0, sizeof(uint8_t) * 8); // this should be blank as well
+  memset(kd->key_identifier, 0, sizeof(uint8_t) * 8); // blank
+  memset(kd->key_mic, 0, sizeof(uint8_t) * 16); // set to 0 for now
+  kd->key_data_length = htons(56); // 22-bytes-RSN + 32-bytes-gtk + 2-bytes-gtk-N
+
+  actual_length += sizeof(struct click_wpa_eapol_key_descriptor);
+
+  /* Begin packing key-data */
+
+  ptr += sizeof(struct click_wpa_eapol_key_descriptor);
+  uint8_t *key_data = ptr; // pointer to starting point of key-data
+  uint8_t *buf = (uint8_t *) malloc (56); // buf to pass plaintext
+
+  /* First, we pack the RSN field */
+  ptr[0] =  48; // tag id
+  ptr[1] =  20; // len
+  ptr += 2;
+  actual_length += 2;
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // version
+  ptr += 2;
+  actual_length += 2;
+  *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x04ac0f00); // group key suite
+  ptr += 4;
+  actual_length += 4;
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // pairwise suite count
+  ptr += 2;
+  actual_length += 2;
+
+  // NOTE: Only supports one for now
+   *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x04ac0f00); // pairwise suite list
+  ptr += 4;
+  actual_length += 4;
+
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t) 1); // authentication suite count
+  ptr += 2;
+  actual_length += 2;
+
+  // NOTE: Only supports one for now
+  *(uint32_t *)ptr = cpu_to_le32((uint32_t)0x02ac0f00); // authentication suite list
+  ptr += 4;
+  actual_length += 4;
+
+  *(uint16_t *)ptr = cpu_to_le16((uint16_t)0x000c); // capabilities
+  ptr += 2;
+  actual_length += 2;
+
+//   /* Now, pack the GTK */
+//   memcpy (ptr, gtk, 32);
+//   ptr += 32;
+//   actual_length += 32;
+
+//   /* And lastly, pack the GTK-N */
+//   *(uint16_t *)ptr = htons(0x0001);
+//   ptr += 2;
+//   actual_length += 2;
+// fprintf(stderr, "6666\n");
+
+
+  // THIS IS TEMPORARY PLEASE REMOVE LATER THX
+  uint8_t *tmp_gtk = reinterpret_cast<uint8_t *>(const_cast<char *>("\xdd\x16\x00\x0f\xac\x01\x01\x00\xf1\x7e\x0d\x78\xe2\xf7\x16\x88\x5a\xf3\xcc\xc3\xeb\xd2\xc3\x5d\xdd\x00"));
+  for (uint8_t i = 0; i < 26; ++i)
+  {
+    memcpy(ptr,tmp_gtk,26);
+  }
+
+  memcpy(buf, key_data, 56);
+
+  /* We need to encrypt the payload, and setup the MIC */
+  aes_wrap(ptk->kek, (56 - 8)/8, buf, key_data);
+
+  /* now update the MIC: something wrong here? */
+  wpa_eapol_key_mic(ptk->kck, kd->key_info & WPA_KEY_INFO_TYPE_MASK,
+                   (uint8_t *)ah, 
+                   ntohs(ah->len) + sizeof(*ah), 
+                   kd->key_mic);
+
+  if (wpa_verify_key_mic (ptk, (uint8_t *)ah, ntohs(ah->len) + sizeof(*ah)))
+    {
+      if (_debug) {
+        fprintf(stderr, "Error: 3/4 your own MIC verification failed ?!?!\n"); 
+      }
+      return;
+    }
+  
+  if (_debug) {
+    fprintf(stderr, "3/4: MIC verification success\n"); 
+  }
+
+  output(0).push(p);  
+}
+
+/**
+ * Handle EAPOL frames from a client.
+ * NOTE: Assumes only EAPOL-key types for
+ *       WPA as of now.
+ */
+void
+OdinAgent::recv_wpa_eapol_key (Packet *p)
+{
+  // We need to check which of the 4 handshake msgs
+  // we've received but what the heck. :)
+  struct click_wifi *w = (struct click_wifi *) p->data();
+
+  EtherAddress dst = EtherAddress(w->i_addr1);
+  EtherAddress src = EtherAddress(w->i_addr2);
+  EtherAddress bssid = EtherAddress(w->i_addr3);
+
+  if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_1) {
+    
+    if (_debug)
+      fprintf(stderr, "Received wpa_eapol_msg_2 from %s\n", src.unparse_colon().c_str());
+
+    // Receiving message 2/4 of 4-way handshake
+    _sta_mapping_table.get_pointer(src)->state_4way = FOUR_WAY_STATE_3;
+
+    uint8_t *ptr;
+    
+    uint8_t *key = reinterpret_cast<uint8_t *>(const_cast<char *>("\x1e\xc1\x83\xfa\x15\xdf\x38\xcc\x4c\x00\x62\x5c\xd7\x74\x38\x8c\x65\x3b\x4f\x8f\xf5\x7f\x94\x12\x59\x51\x06\x44\x29\x4b\xb2\x58"));
+
+    uint8_t *gmk = reinterpret_cast<uint8_t *>(const_cast<char *>("\x11\xc1\x83\xfa\x15\xdf\x38\xcc\x4c\x00\x62\x5c\xd7\x74\x38\x8c\x65\x3b\x4f\x8f\xf5\x7f\x94\x12\x59\x51\x06\x44\x29\x4b\xb2\x58"));  
+
+    uint8_t *anonce = (uint8_t *) malloc (sizeof(uint8_t) * WPA_NONCE_LEN);
+    uint8_t *gnonce = (uint8_t *) malloc (sizeof(uint8_t) * WPA_NONCE_LEN);
+    struct wpa_ptk ptk;
+    uint8_t gtk[32];
+
+    memset(anonce, 1, sizeof(uint8_t) * WPA_NONCE_LEN);
+    memset(gnonce, 1, sizeof(uint8_t) * WPA_NONCE_LEN);
+
+    // Now at LLC header
+    ptr = (uint8_t *) (w + 1);
+
+    // At end of LLC header
+    ptr += WIFI_LLC_HEADER_LEN + 2;
+
+    struct click_802_1x_header *ah = (struct click_802_1x_header *) ptr;
+
+    struct click_wpa_eapol_key_descriptor *kd = (struct click_wpa_eapol_key_descriptor *) (ah + 1);
+
+    wpa_pmk_to_ptk (key, 32, "Pairwise key expansion", 
+                    reinterpret_cast<const uint8_t *>(dst.data()), 
+                    reinterpret_cast<const uint8_t *>(src.data()), 
+                    anonce, kd->key_nonce, (uint8_t *) &ptk, 64, 0);
+
+    if (_debug) {
+      fprintf(stderr, "Calculated PTK: ");
+      for (int i = 0; i < 64; ++i)
+      {
+        fprintf(stderr, "%hhx", ((uint8_t *)&ptk)[i]);
+      }
+      fprintf(stderr, "\n");
+    }
+
+    if (wpa_verify_key_mic (&ptk, (uint8_t *)ah, ntohs(ah->len) + sizeof(*ah)))
+      {
+        if (_debug)
+          fprintf(stderr, "Error: MIC verification failed\n");
+
+        return;
+      }
+
+    if (_debug)
+      fprintf(stderr, "MIC verification successful\n");
+
+    wpa_gmk_to_gtk (gmk, "Group key expansion",
+                    dst.data(), gnonce,
+                    gtk, 32);
+
+    memcpy(_sta_mapping_table.get_pointer(src)->tk1, ptk.tk1, 16);
+
+    send_wpa_eapol_key_3 (src, &ptk, gtk);
+  }
+  else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
+    fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
+  }
+  // else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
+  //   // Receiving message 4/4 of 4-way handshake
+  //   fprintf(stderr, "Received message 4/4 THX\n");
+
+  //   struct nl_sock *sock;
+  //   int family;
+  //   struct nl_cb *cb = nl_cb_alloc(NL_CB_DEFAULT);
+
+
+  //   // Allocate and initialize a new netlink handle
+  //   sock = nl_socket_alloc();
+
+  //   if (sock == NULL) {
+  //     fprintf(stderr, "Couldn't allocate nl_sock!!!!\n");
+  //     return;
+  //   }
+    
+  //   if (genl_connect(sock)){
+  //     fprintf(stderr, "Failed to connect to general netlink!\n");
+  //     return;
+  //   }
+
+  //   family = genl_ctrl_resolve(sock, "nl80211");
+  //   if (family < 0) {
+  //     fprintf(stderr, "genl_ctrl_resolve failed!\n");
+  //     return; 
+  //   }
+
+  //   struct nl_msg *msg = nlmsg_alloc();
+
+  //   if (!msg) {
+  //     fprintf(stderr, "Not enough memory to allocate nl_msg!\n");
+  //     return;
+  //   }
+
+  //   fprintf(stderr, "Key to inject:\n");
+  //   for (int i = 0; i < 16; ++i)
+  //   {
+  //     fprintf(stderr, "%hhx", _sta_mapping_table.get_pointer(src)->tk1[i]);
+  //   }
+  //   fprintf(stderr, "\n");
+
+  //   genlmsg_put(msg, 0, 0, family, 0, 0, NL80211_CMD_NEW_KEY, 0);
+  //   nla_put(msg, NL80211_ATTR_KEY_DATA, 16, _sta_mapping_table.get_pointer(src)->tk1);
+  //   nla_put_u32(msg, NL80211_ATTR_KEY_CIPHER, WLAN_CIPHER_SUITE_CCMP);
+  //   nla_put(msg, NL80211_ATTR_MAC, ETH_ALEN, src.data());
+  //   nla_put_u8(msg, NL80211_ATTR_KEY_IDX, 0);
+  //   fprintf(stderr, "Ifindex: %d\n", if_nametoindex("mon0"));
+  //   nla_put_u32(msg, NL80211_ATTR_IFINDEX, if_nametoindex("mon0"));
+  //   int err = nl_send_auto_complete(sock, msg);
+  //   if (err < 0) {
+  //     fprintf(stderr, "Err after nl_send_auto_complete\n");
+  //   }
+
+
+  //   nl_cb_err(cb, NL_CB_CUSTOM, error_handler, &err);
+  //   nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
+  //   nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
+
+  //   while (err > 0) {
+  //     fprintf(stderr, "Receiving msgs\n");
+  //     nl_recvmsgs(sock, cb);
+  //   }
+
+  //   nlmsg_free(msg);
+  // }
+}
 
 /** 
  * Receive an Open Auth request. This code is
@@ -977,6 +1506,15 @@ OdinAgent::push(int port, Packet *p)
         // for roaming.
 
         p->kill ();
+        return;
+      }
+
+      /* We handle EAPOL frames but let everything else pass.
+         TODO: We should probably have a port status on the LVAP? */
+      uint16_t type = *(uint16_t *)(((uint8_t *)(w + 1)) + WIFI_LLC_HEADER_LEN);
+
+      if (ntohs(type) == 0x888e) {
+        recv_wpa_eapol_key (p);
         return;
       }
 
@@ -1393,6 +1931,405 @@ cleanup_lvap (Timer *timer, void *data)
 
 
 
+/******************* CRYPTO *************************/
+/* Code shamelessly copy-pasted off hostapd and the
+   Internetz */
+
+int 
+OdinAgent::wpa_pmk_to_ptk(const uint8_t *pmk, size_t pmk_len, const char *label,
+        const uint8_t *addr1, const uint8_t *addr2,
+        const uint8_t *nonce1, const uint8_t *nonce2,
+        uint8_t *ptk, size_t ptk_len, int use_sha256)
+{
+  uint8_t data[2 * ETH_ALEN + 2 * WPA_NONCE_LEN];
+
+  if (memcmp(addr1, addr2, ETH_ALEN) < 0) { 
+    memcpy(data, addr1, ETH_ALEN);
+    memcpy(data + ETH_ALEN, addr2, ETH_ALEN);
+  } else {
+    memcpy(data, addr2, ETH_ALEN);
+    memcpy(data + ETH_ALEN, addr1, ETH_ALEN);
+  }
+
+  if (memcmp(nonce1, nonce2, WPA_NONCE_LEN) < 0) { 
+    memcpy(data + 2 * ETH_ALEN, nonce1, WPA_NONCE_LEN);
+    memcpy(data + 2 * ETH_ALEN + WPA_NONCE_LEN, nonce2,
+        WPA_NONCE_LEN);
+  } else {
+    memcpy(data + 2 * ETH_ALEN, nonce2, WPA_NONCE_LEN);
+    memcpy(data + 2 * ETH_ALEN + WPA_NONCE_LEN, nonce1,
+        WPA_NONCE_LEN);
+  }
+
+  if (_debug) {
+    fprintf(stderr, "\n== wpa_pmk_to_ptk() dump BEGIN ==\n");
+    fprintf(stderr, "\nNonce1: ");
+    for (int i = 0; i < WPA_NONCE_LEN; i++)
+      fprintf(stderr, "%hhx", nonce1[i]);
+
+    fprintf(stderr, "\nNonce2: ");
+    for (int i = 0; i < WPA_NONCE_LEN; i++)
+      fprintf(stderr, "%hhx", nonce2[i]);
+
+    fprintf(stderr, "\nAddr1: ");
+    for (int i = 0; i < 6; i++)
+      fprintf(stderr, "%hhx:", addr1[i]);
+    
+    fprintf(stderr, "\nAddr2: ");
+    for (int i = 0; i < 6; i++)
+      fprintf(stderr, "%hhx:", addr2[i]);
+    
+    fprintf(stderr, "\nPMK: ");
+    for (uint32_t i = 0; i < pmk_len; i++)
+      fprintf(stderr, "%hhx", pmk[i]);
+    
+    fprintf(stderr, "\n== wpa_pmk_to_ptk() dump END == \n");
+  }
+
+  sha1_prf(pmk, pmk_len, label, data, sizeof(data), ptk, ptk_len);
+  //sha1_prf((unsigned char *)pmk, pmk_len, data, sizeof(data), ptk, ptk_len);
+
+  return 0;
+}
+
+#define SHA1_MAC_LEN 20
+
+
+int
+OdinAgent::sha1_prf(const uint8_t *key, size_t key_len, const char *label,
+       const uint8_t *data, size_t data_len, uint8_t *buf, size_t buf_len)
+{
+  uint8_t counter = 0;
+  size_t pos, plen;
+  uint8_t hash[SHA1_MAC_LEN];
+  size_t label_len = strlen(label) + 1;
+  const unsigned char *addr[3];
+  size_t len[3];
+
+  addr[0] = (uint8_t *) label;
+  len[0] = label_len;
+  addr[1] = data;
+  len[1] = data_len;
+  addr[2] = &counter;
+  len[2] = 1;
+
+  pos = 0;
+  while (pos < buf_len) {
+    plen = buf_len - pos;
+    if (plen >= SHA1_MAC_LEN) {
+      if (hmac_sha1_vector(key, key_len, 3, addr, len,
+               &buf[pos]))
+        return -1;
+      pos += SHA1_MAC_LEN;
+    } else {
+      if (hmac_sha1_vector(key, key_len, 3, addr, len,
+               hash))
+        return -1;
+      memcpy(&buf[pos], hash, plen);
+      break;
+    }
+    counter++;
+  }
+
+  return 0;
+}
+
+
+int 
+OdinAgent::sha1_vector(size_t num_elem, const uint8_t *addr[], const size_t *len, uint8_t *mac)
+{
+  SHA_CTX ctx;
+  size_t i;
+
+  SHA1_Init(&ctx);
+
+  for (i = 0; i < num_elem; i++){
+    SHA1_Update(&ctx, addr[i], len[i]);
+  }
+
+  SHA1_Final(mac, &ctx);
+  
+  return 0;
+}
+
+
+int 
+OdinAgent::hmac_sha1_vector(const uint8_t *key, size_t key_len, size_t num_elem,
+         const uint8_t *addr[], const size_t *len, uint8_t *mac)
+{
+  unsigned char k_pad[64]; /* padding - key XORd with ipad/opad */
+  unsigned char tk[20];
+  const uint8_t *_addr[6];
+  size_t _len[6], i;
+
+
+  if (num_elem > 5) {
+    /*
+     * Fixed limit on the number of fragments to avoid having to
+     * allocate memory (which could fail).
+     */
+    return -1;
+  }
+
+  /* if key is longer than 64 bytes reset it to key = SHA1(key) */
+  if (key_len > 64) {
+    if (sha1_vector(1, &key, &key_len, tk))
+      return -1;
+    key = tk;
+    key_len = 20;
+  }
+
+
+  /* the HMAC_SHA1 transform looks like:
+   *
+   * SHA1(K XOR opad, SHA1(K XOR ipad, text))
+   *
+   * where K is an n byte key
+   * ipad is the byte 0x36 repeated 64 times
+   * opad is the byte 0x5c repeated 64 times
+   * and text is the data being protected */
+
+  /* start out by storing key in ipad */
+  memset(k_pad, 0, sizeof(k_pad));
+  memcpy(k_pad, key, key_len);
+
+
+  /* XOR key with ipad values */
+  for (i = 0; i < 64; i++)
+    k_pad[i] ^= 0x36;
+
+  /* perform inner SHA1 */
+  _addr[0] = k_pad;
+  _len[0] = 64;
+  for (i = 0; i < num_elem; i++) {
+    _addr[i + 1] = addr[i];
+    _len[i + 1] = len[i];
+  }
+
+  if (sha1_vector(1 + num_elem, _addr, _len, mac))
+    return -1;
+
+  memset(k_pad, 0, sizeof(k_pad));
+  memcpy(k_pad, key, key_len);
+
+  /* XOR key with opad values */
+  for (i = 0; i < 64; i++)
+    k_pad[i] ^= 0x5c;
+
+  /* perform outer SHA1 */
+  _addr[0] = k_pad;
+  _len[0] = 64;
+  _addr[1] = mac;
+  _len[1] = SHA1_MAC_LEN;
+  return sha1_vector(2, _addr, _len, mac);
+}
+
+
+int 
+OdinAgent::wpa_gmk_to_gtk(const uint8_t *gmk, const char *label, const uint8_t *addr,
+        const uint8_t *gnonce, uint8_t *gtk, size_t gtk_len)
+{
+  uint8_t data[ETH_ALEN + WPA_NONCE_LEN + 8 + 16]; 
+  uint8_t *pos;
+  int ret = 0; 
+
+  /* GTK = PRF-X(GMK, "Group key expansion",
+   *  AA || GNonce || Time || random data)
+   * The example described in the IEEE 802.11 standard uses only AA and
+   * GNonce as inputs here. Add some more entropy since this derivation
+   * is done only at the Authenticator and as such, does not need to be
+   * exactly same.
+   */
+  memcpy(data, addr, ETH_ALEN);
+  memcpy(data + ETH_ALEN, gnonce, WPA_NONCE_LEN);
+  pos = data + ETH_ALEN + WPA_NONCE_LEN;
+  wpa_get_ntp_timestamp(pos);
+  pos += 8;
+  // if (random_get_bytes(pos, 16) < 0) 
+  //   ret = -1;
+
+  if (sha1_prf(gmk, 32, label, data, sizeof(data), gtk, gtk_len)
+      < 0) 
+    ret = -1;
+
+  return ret; 
+}
+
+
+void 
+OdinAgent::wpa_get_ntp_timestamp(uint8_t *buf)
+{
+  Timestamp now = Timestamp::now();
+  uint32_t sec, usec;
+  uint32_t tmp;
+
+  /* 64-bit NTP timestamp (time from 1900-01-01 00:00:00) */
+  sec = now.sec() + 2208988800U; /* Epoch to 1900 */
+  /* Estimate 2^32/10^6 = 4295 - 1/32 - 1/512 */
+  usec = now.usec();
+  usec = 4295 * usec - (usec >> 5) - (usec >> 9);
+  tmp = htons(sec);
+  memcpy(buf, (uint8_t *) &tmp, 4);
+  tmp = htons(usec);
+  memcpy(buf + 4, (uint8_t *) &tmp, 4);
+}
+
+
+int 
+OdinAgent::wpa_verify_key_mic(struct wpa_ptk *PTK, uint8_t *data, size_t data_len)
+{
+  struct click_802_1x_header *hdr;
+  struct click_wpa_eapol_key_descriptor *key;
+  uint16_t key_info;
+  int ret = 0;
+  uint8_t mic[16];
+
+  if (data_len < sizeof(*hdr) + sizeof(*key))
+    return -1;
+
+  hdr = (struct click_802_1x_header *) data;
+  key = (struct click_wpa_eapol_key_descriptor *) (hdr + 1);
+  key_info = ntohs(key->key_info);
+  memcpy(mic, key->key_mic, 16);
+  memset(key->key_mic, 0, 16);
+
+  if (_debug) {
+    fprintf(stderr, "wpa_verify_key_mic(): MIC to get: ");
+    for (int i = 0; i < 16; ++i)
+    {
+      fprintf(stderr, "%hhx",mic[i]);
+    }
+    fprintf(stderr, "\n");
+  }
+
+  if (wpa_eapol_key_mic(PTK->kck, key_info & WPA_KEY_INFO_TYPE_MASK,
+            data, data_len, key->key_mic) ||
+      memcmp(mic, key->key_mic, 16) != 0)
+    ret = -1;
+  memcpy(key->key_mic, mic, 16);
+  return ret;
+}   
+
+
+int
+OdinAgent::hmac_sha1(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
+         uint8_t *mac)
+{
+  return hmac_sha1_vector(key, key_len, 1, &data, &data_len, mac);
+}
+
+
+int 
+OdinAgent::wpa_eapol_key_mic(const uint8_t *key, int ver, const uint8_t *buf, size_t len,
+          uint8_t *mic)
+{
+  uint8_t hash[20];
+
+  if (hmac_sha1(key, 16, buf, len, hash))
+      return -1;
+  memcpy(mic, hash, 16);
+
+  if (_debug) {
+    fprintf(stderr, "wpa_eapol_key_mic(): Computed MIC: ");
+    for (int i = 0; i < 16; ++i)
+    {
+      fprintf(stderr, "%hhx",mic[i]);
+    }
+    fprintf(stderr, "\n");
+  }
+
+  return 0;
+} 
+
+
+int
+OdinAgent::aes_wrap(const uint8_t *kek, int n, const uint8_t *plain, uint8_t *cipher)
+{
+  uint8_t *a, *r, b[16];
+  int i, j;
+  void *ctx;
+
+  a = cipher;
+  r = cipher + 8;
+
+  if (_debug)
+  {
+    fprintf(stderr, "aes_wrap(): Plaintext:\n");
+    for (int i = 0; i < n*8; ++i)
+    {
+      fprintf(stderr, "%hhx", plain[i]);
+    }
+    fprintf(stderr, "\n");
+  }
+  /* 1) Initialize variables. */
+  memset(a, 0xa6, 8); 
+  memcpy(r, plain, 8 * n); 
+
+  ctx = aes_encrypt_init(kek, 16);
+  if (ctx == NULL)
+    return -1; 
+
+  /* 2) Calculate intermediate values.
+   * For j = 0 to 5
+   *     For i=1 to n
+   *         B = AES(K, A | R[i])
+   *         A = MSB(64, B) ^ t where t = (n*j)+i
+   *         R[i] = LSB(64, B)
+   */
+  for (j = 0; j <= 5; j++) {
+    r = cipher + 8;
+    for (i = 1; i <= n; i++) {
+      memcpy(b, a, 8); 
+      memcpy(b + 8, r, 8); 
+      aes_encrypt(ctx, b, b); 
+      memcpy(a, b, 8); 
+      a[7] ^= n * j + i;
+      memcpy(r, b + 8, 8); 
+      r += 8;
+    }   
+  }
+  aes_encrypt_deinit(ctx);
+
+  /* 3) Output the results.
+   *
+   * These are already in @cipher due to the location of temporary
+   * variables.
+   */
+
+  return 0;
+}
+
+
+void * 
+OdinAgent::aes_encrypt_init(const uint8_t *key, size_t len)
+{
+  AES_KEY *ak;
+  ak = (AES_KEY *) malloc(sizeof(*ak));
+  if (ak == NULL)
+    return NULL;
+  if (AES_set_encrypt_key(key, 8 * len, ak) < 0) {
+    free(ak);
+    return NULL;
+  }
+  return ak; 
+}
+
+
+void
+OdinAgent::aes_encrypt(void *ctx, const uint8_t *plain, uint8_t *crypt)
+{
+  AES_encrypt(plain, crypt, (const AES_KEY *) ctx);
+}
+
+
+void
+OdinAgent::aes_encrypt_deinit(void *ctx)
+{
+  free(ctx);
+}
+
+
 CLICK_ENDDECLS
 EXPORT_ELEMENT(OdinAgent)
+ELEMENT_LIBS(-lssl -lnl-tiny)
 ELEMENT_REQUIRES(userlevel)
