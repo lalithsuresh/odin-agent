@@ -1146,25 +1146,30 @@ OdinAgent::recv_wpa_eapol_key (Packet *p)
     send_wpa_eapol_key_3 (src, &ptk, gtk);
   }
   else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
-//    fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
+    fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
 
     FILE *keyidx_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keyidx","w");
     FILE *keyval_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keyval","w");
     FILE *keymac_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keymac","w");
     
-    uint8_t keystr[33];
-
-    if (debugfs_file!=NULL) {
-        fprintf(keyidx_file, "%d\n", _sta_mapping_table.get(src).keyidx);//, sa.take_string().c_str());
+    
+    if (keyidx_file != NULL || keyval_file != NULL || keymac_file != NULL) {
+        fprintf(stderr, "key-idx: %d\n", 0);
+        fprintf(keyidx_file, "%d\n", 0);//, sa.take_string().c_str());
         fclose (keyidx_file);
-
         
-        fprintf(stderr, "%d\n", );
-        fprintf(keyval_file, "%s\n", EtherAddress (src).unparse_colon().c_str());//, sa.take_string().c_str());
-        fclose (keyval_file);
+        fprintf(stderr, "key-val: ");
+        for (int i = 0; i < 16; ++i)
+        {
+          fprintf(stderr, "%hhx", _sta_mapping_table.get(src).tk1[i]);
+          fprintf(keyval_file, "%hhx", _sta_mapping_table.get(src).tk1[i]);
+        }
 
-        fprintf(stderr, "%s\n", EtherAddress (bssid_mask).unparse_colon().c_str());
-        fprintf(keymac_file, "%s\n", EtherAddress (src).unparse_colon().c_str());//, sa.take_string().c_str());
+        fprintf(keyval_file, "\n");
+        fclose(keyval_file);
+
+        fprintf(stderr, "\nkey-mac: %s\n", src.unparse_colon().c_str());
+        fprintf(keymac_file, "%s\n", src.unparse_colon().c_str());//, sa.take_string().c_str());
         fclose (keymac_file);
     }
   }
@@ -1418,7 +1423,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
 
     //htons(*(uint16_t *)(&oss->replay_counter[6]))
     //htonl(*(uint16_t *)(&oss->replay_counter[2]))
-    memcpy((void *) (p_out->data()+sizeof(click_wifi)), oss->replay_counter[7], 1);
+    memcpy((void *) (p_out->data()+sizeof(click_wifi)), &oss->replay_counter[7], 1);
 
     /* Zero reserved bits */
     memset((void *) (p_out->data()+sizeof(click_wifi) + 1), 0, 2);
@@ -1497,10 +1502,6 @@ OdinAgent::wifi_decap (Packet *p)
     bssid = EtherAddress(w->i_addr3);
     break;
   default:
-    if (_strict) {
-      p->kill();
-      return 0;
-    }
     dst = EtherAddress(w->i_addr1);
     src = EtherAddress(w->i_addr2);
     bssid = EtherAddress(w->i_addr3);
@@ -1529,7 +1530,7 @@ OdinAgent::wifi_decap (Packet *p)
   }
 
   uint16_t ether_type;
-  if (!_strict || memcmp(WIFI_LLC_HEADER, p_out->data() + wifi_header_size,
+  if (memcmp(WIFI_LLC_HEADER, p_out->data() + wifi_header_size,
        WIFI_LLC_HEADER_LEN)) {
     memcpy(&ether_type, p_out->data() + wifi_header_size + sizeof(click_llc) - 2, 2);
   } else {
@@ -1539,16 +1540,16 @@ OdinAgent::wifi_decap (Packet *p)
 
   p_out->pull(wifi_header_size + sizeof(struct click_llc));
 
-  if (_push_eth) {
-    p_out = p_out->push_mac_header(14);
-    if (!p_out) {
-      return 0;
-    }
-
-    memcpy(p_out->data(), dst.data(), 6);
-    memcpy(p_out->data() + 6, src.data(), 6);
-    memcpy(p_out->data() + 12, &ether_type, 2);
+  
+  p_out = p_out->push_mac_header(14);
+  if (!p_out) {
+    return 0;
   }
+
+  memcpy(p_out->data(), dst.data(), 6);
+  memcpy(p_out->data() + 6, src.data(), 6);
+  memcpy(p_out->data() + 12, &ether_type, 2);
+
 
   return p_out;
 }
