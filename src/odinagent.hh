@@ -96,7 +96,9 @@ public:
   void send_wpa_eapol_key_3 (EtherAddress dst, struct wpa_ptk *ptk, uint8_t *gtk);
   void recv_wpa_eapol_key (Packet *p);
 
-  Packet* wifi_encap (Packet *p, EtherAddress bssid);
+  //Packet* wifi_encap (Packet *p, EtherAddress bssid);
+  Packet* wifi_encap (Packet *p, OdinStationState *oss);
+  Packet* wifi_decap (Packet *p);
 
   // Methods to handle pub-sub
   void add_subscription (long subscription_id, EtherAddress addr, String statistic, relation_t r, double val);

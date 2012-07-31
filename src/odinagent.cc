@@ -1317,14 +1317,19 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
  * Borrowed from WifiEncap element.
  * NOTE: This method uses the FromDS mode (0x02)
  */
-Packet*
-OdinAgent::wifi_encap (Packet *p, EtherAddress bssid)
+ // 20120731 jsz: use OdinStationState ptr instead of MAC
+ //OdinAgent::wifi_encap (Packet *p, EtherAddress bssid)
+ Packet*
+ OdinAgent::wifi_encap (Packet *p, OdinStationState *oss)
 {
   EtherAddress src;
   EtherAddress dst;
 
   uint16_t ethtype;
   WritablePacket *p_out = 0;
+
+  // 20120731 jsz: add bssid
+  EtherAddress bssid = oss->_vap_bssid;
 
   if (p->length() < sizeof(struct click_ether)) {
     // click_chatter("%{element}: packet too small: %d vs %d\n",
@@ -1371,6 +1376,147 @@ OdinAgent::wifi_encap (Packet *p, EtherAddress bssid)
   memcpy(w->i_addr1, dst.data(), 6);
   memcpy(w->i_addr2, bssid.data(), 6);
   memcpy(w->i_addr3, src.data(), 6);
+
+    /* check for LVAP crypto here */
+
+  if(oss->state_4way == FOUR_WAY_STATE_GROUP) {
+    if (!(p_out = p_out->push(WIFI_CCMP_HEADERSIZE)))
+      return 0;
+
+    /* Move the 802.11 header to the begining */
+    memmove((void *) p_out->data(), p_out->data() + WIFI_CCMP_HEADERSIZE, sizeof(click_wifi));
+
+    w = (struct click_wifi *) p_out->data();
+
+    memcpy((void *) (p_out->data()+sizeof(click_wifi)), pn, 2);
+
+    /* Zero reserved bits */
+    memset((void *) (p_out->data()+sizeof(click_wifi) + 2), 0, 1);
+
+    uint8_t keyid = 32;
+    /* Set the keyid flag and unicast only */
+    memcpy((void *) (p_out->data()+sizeof(click_wifi) + 3), &keyid, 1);
+    memcpy((void *) (p_out->data()+sizeof(click_wifi) + 4), pn+4, 4);
+    
+    w->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
+    w->i_fc[1] = 0;
+    w->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & _mode);
+      /* Set crypto header flag */
+    w->i_fc[1] |= WIFI_FC1_WEP;
+
+    if (!(p_out = p_out->put(WIFI_CCMP_MICLEN)))
+      return 0;
+
+    memcpy((void *) (p_out->data()+ (p_out->length() - 4 )), (void *) (p_out->data()+ (p_out->length() - WIFI_CCMP_MICLEN - 4 )), 4);
+
+    /* Zero the MIC */
+    memset((void *) (p_out->data()+ (p_out->length() - WIFI_CCMP_MICLEN - 4 )), 0, 8);
+  }
+
+  return p_out;
+}
+
+Packet *
+OdinAgent::wifi_decap (Packet *p)
+{
+  uint8_t dir;
+  //uint8_t keyid;
+  struct click_wifi *w = (struct click_wifi *) p->data();
+  EtherAddress bssid;
+  EtherAddress src;
+  EtherAddress dst;
+
+  int wifi_header_size = sizeof(struct click_wifi);
+  if ((w->i_fc[1] & WIFI_FC1_DIR_MASK) == WIFI_FC1_DIR_DSTODS)
+    wifi_header_size += WIFI_ADDR_LEN;
+  if (WIFI_QOS_HAS_SEQ(w))
+    wifi_header_size += sizeof(uint16_t);
+
+  struct click_wifi_extra *ceh = WIFI_EXTRA_ANNO(p);
+  if ((ceh->magic == WIFI_EXTRA_MAGIC) && ceh->pad && (wifi_header_size & 3))
+    wifi_header_size += 4 - (wifi_header_size & 3);
+
+  if (p->length() < wifi_header_size + sizeof(struct click_llc)) {
+    p->kill();
+    return 0;
+  }
+
+  dir = w->i_fc[1] & WIFI_FC1_DIR_MASK;
+
+  switch (dir) {
+  case WIFI_FC1_DIR_NODS:
+    dst = EtherAddress(w->i_addr1);
+    src = EtherAddress(w->i_addr2);
+    bssid = EtherAddress(w->i_addr3);
+    break;
+  case WIFI_FC1_DIR_TODS:
+    bssid = EtherAddress(w->i_addr1);
+    src = EtherAddress(w->i_addr2);
+    dst = EtherAddress(w->i_addr3);
+    break;
+  case WIFI_FC1_DIR_FROMDS:
+    dst = EtherAddress(w->i_addr1);
+    bssid = EtherAddress(w->i_addr2);
+    src = EtherAddress(w->i_addr3);
+    break;
+  case WIFI_FC1_DIR_DSTODS:
+    dst = EtherAddress(w->i_addr1);
+    src = EtherAddress(w->i_addr2);
+    bssid = EtherAddress(w->i_addr3);
+    break;
+  default:
+    if (_strict) {
+      p->kill();
+      return 0;
+    }
+    dst = EtherAddress(w->i_addr1);
+    src = EtherAddress(w->i_addr2);
+    bssid = EtherAddress(w->i_addr3);
+  }
+
+  WritablePacket *p_out = p->uniqueify();
+  if (!p_out) {
+    return 0;
+  }
+
+  if (w->i_fc[1] & WIFI_FC1_WEP) {
+    const unsigned char* payload = p_out->data() + (wifi_header_size + WIFI_CCMP_HEADERSIZE);
+    int payload_len = p_out->length() - (wifi_header_size + WIFI_CCMP_HEADERSIZE + WIFI_CCMP_MICLEN + 4);
+
+    /* strip the CCMP header off */
+    memmove((void *)(p_out->data() + wifi_header_size), payload, payload_len);
+
+    /* Strip the MIC off */
+    memmove((void *)(p_out->data() + (wifi_header_size + payload_len)), p_out->data()+ (p_out->length() - 4) , 4);
+    
+    /* strip the CCMP MIC and CCMP hdr off the tail of the packet */
+    p_out->take(WIFI_CCMP_MICLEN + WIFI_CCMP_HEADERSIZE);
+
+    w = (struct click_wifi *) p_out->data();
+    w->i_fc[1] &= ~WIFI_FC1_WEP;
+  }
+
+  uint16_t ether_type;
+  if (!_strict || memcmp(WIFI_LLC_HEADER, p_out->data() + wifi_header_size,
+       WIFI_LLC_HEADER_LEN)) {
+    memcpy(&ether_type, p_out->data() + wifi_header_size + sizeof(click_llc) - 2, 2);
+  } else {
+    p_out->kill();
+    return 0;
+  }
+
+  p_out->pull(wifi_header_size + sizeof(struct click_llc));
+
+  if (_push_eth) {
+    p_out = p_out->push_mac_header(14);
+    if (!p_out) {
+      return 0;
+    }
+
+    memcpy(p_out->data(), dst.data(), 6);
+    memcpy(p_out->data() + 6, src.data(), 6);
+    memcpy(p_out->data() + 12, &ether_type, 2);
+  }
 
   return p_out;
 }
@@ -1554,7 +1700,9 @@ OdinAgent::push(int port, Packet *p)
             memcpy(ea->arp_sha, oss._vap_bssid.data(), 6);
         }
       }
-      Packet *p_out = wifi_encap (p, oss._vap_bssid);
+      // 20120731 jsz: use LVAP pointer instead of MAC
+      //Packet *p_out = wifi_encap (p, oss._vap_bssid);
+      Packet *p_out = wifi_encap (p, &oss);
       output(2).push(p_out);
       return;
     }
