@@ -56,6 +56,14 @@ CLICK_DECLS
 
 #define WPA_KEY_INFO_TYPE_MASK ((uint16_t) (BIT(0) | BIT(1) | BIT(2)))
 
+#define WIFI_WEP_HEADERSIZE (WIFI_WEP_IVLEN + WIFI_WEP_KIDLEN)
+
+#define WIFI_CCMP_PNLEN      7 /* 7 octets */
+#define WIFI_CCMP_KIDLEN     1 /* 1 octet */
+#define WIFI_CCMP_MICLEN     8
+#define WIFI_CCMP_HEADERSIZE (WIFI_CCMP_PNLEN + WIFI_CCMP_KIDLEN)
+
+
 struct click_802_1x_header {
   uint8_t version;
   uint8_t type;
