@@ -1146,8 +1146,27 @@ OdinAgent::recv_wpa_eapol_key (Packet *p)
     send_wpa_eapol_key_3 (src, &ptk, gtk);
   }
   else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
-    fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
+//    fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
+
+    FILE *keyidx_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keyidx","w");
+    FILE *keyval_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keyval","w");
+    FILE *keymac_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/keymac","w");
     
+    uint8_t keystr[33];
+
+    if (debugfs_file!=NULL) {
+        fprintf(keyidx_file, "%d\n", _sta_mapping_table.get(src).keyidx);//, sa.take_string().c_str());
+        fclose (keyidx_file);
+
+        
+        fprintf(stderr, "%d\n", );
+        fprintf(keyval_file, "%s\n", EtherAddress (src).unparse_colon().c_str());//, sa.take_string().c_str());
+        fclose (keyval_file);
+
+        fprintf(stderr, "%s\n", EtherAddress (bssid_mask).unparse_colon().c_str());
+        fprintf(keymac_file, "%s\n", EtherAddress (src).unparse_colon().c_str());//, sa.take_string().c_str());
+        fclose (keymac_file);
+    }
   }
   // else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
   //   // Receiving message 4/4 of 4-way handshake
