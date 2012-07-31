@@ -1147,6 +1147,7 @@ OdinAgent::recv_wpa_eapol_key (Packet *p)
   }
   else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
     fprintf(stderr, "Client %s has installed keys and has sent wpa_eapol_msg_4\n", src.unparse_colon().c_str());
+    
   }
   // else if (_sta_mapping_table.get(src).state_4way == FOUR_WAY_STATE_3) {
   //   // Receiving message 4/4 of 4-way handshake
@@ -1396,25 +1397,29 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
 
     w = (struct click_wifi *) p_out->data();
 
-    memcpy((void *) (p_out->data()+sizeof(click_wifi)), pn, 2);
+    //htons(*(uint16_t *)(&oss->replay_counter[6]))
+    //htonl(*(uint16_t *)(&oss->replay_counter[2]))
+    memcpy((void *) (p_out->data()+sizeof(click_wifi)), oss->replay_counter[7], 1);
 
     /* Zero reserved bits */
-    memset((void *) (p_out->data()+sizeof(click_wifi) + 2), 0, 1);
+    memset((void *) (p_out->data()+sizeof(click_wifi) + 1), 0, 2);
 
     uint8_t keyid = 32;
     /* Set the keyid flag and unicast only */
     memcpy((void *) (p_out->data()+sizeof(click_wifi) + 3), &keyid, 1);
-    memcpy((void *) (p_out->data()+sizeof(click_wifi) + 4), pn+4, 4);
+    memset((void *) (p_out->data()+sizeof(click_wifi) + 4), 0, 4);
+    //memcpy((void *) (p_out->data()+sizeof(click_wifi) + 4), pn+4, 4);
     
-    w->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
-    w->i_fc[1] = 0;
-    w->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & _mode);
+    //w->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
+    //w->i_fc[1] = 0;
+    //w->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & _mode);
       /* Set crypto header flag */
     w->i_fc[1] |= WIFI_FC1_WEP;
 
     if (!(p_out = p_out->put(WIFI_CCMP_MICLEN)))
       return 0;
 
+    /* Move the FCS to the end */
     memcpy((void *) (p_out->data()+ (p_out->length() - 4 )), (void *) (p_out->data()+ (p_out->length() - WIFI_CCMP_MICLEN - 4 )), 4);
 
     /* Zero the MIC */
