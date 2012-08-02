@@ -1154,22 +1154,22 @@ OdinAgent::recv_wpa_eapol_key (Packet *p)
     
     
     if (keyidx_file != NULL || keyval_file != NULL || keymac_file != NULL) {
-        fprintf(stderr, "key-idx: %d\n", 0);
-        fprintf(keyidx_file, "%d\n", 0);//, sa.take_string().c_str());
+        fprintf(stderr, "key-idx: %d\n", 1);
+        fprintf(keyidx_file, "%d\n", 1);//, sa.take_string().c_str());
         fclose (keyidx_file);
         
         fprintf(stderr, "key-val: ");
         for (int i = 0; i < 16; ++i)
         {
-          fprintf(stderr, "%hhx", _sta_mapping_table.get(src).tk1[i]);
-          fprintf(keyval_file, "%hhx", _sta_mapping_table.get(src).tk1[i]);
+          fprintf(stderr, "%02hhx", _sta_mapping_table.get(src).tk1[i]);
+          fprintf(keyval_file, "%02hhx", _sta_mapping_table.get(src).tk1[i]);
         }
 
-        fprintf(keyval_file, "\n");
+        //fprintf(keyval_file, "\n");
         fclose(keyval_file);
 
         fprintf(stderr, "\nkey-mac: %s\n", src.unparse_colon().c_str());
-        fprintf(keymac_file, "%s\n", src.unparse_colon().c_str());//, sa.take_string().c_str());
+        fprintf(keymac_file, "%s", src.unparse_colon().c_str());//, sa.take_string().c_str());
         fclose (keymac_file);
     }
   }
@@ -1416,6 +1416,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
     if (!(p_out = p_out->push(WIFI_CCMP_HEADERSIZE)))
       return 0;
 
+    //fprintf(stderr, "LOOK AT ME I INSIDE%s\n", );
     /* Move the 802.11 header to the begining */
     memmove((void *) p_out->data(), p_out->data() + WIFI_CCMP_HEADERSIZE, sizeof(click_wifi));
 
@@ -1424,6 +1425,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
     //htons(*(uint16_t *)(&oss->replay_counter[6]))
     //htonl(*(uint16_t *)(&oss->replay_counter[2]))
     memcpy((void *) (p_out->data()+sizeof(click_wifi)), &oss->replay_counter[7], 1);
+    oss->replay_counter[7] += 1;
 
     /* Zero reserved bits */
     memset((void *) (p_out->data()+sizeof(click_wifi) + 1), 0, 2);
@@ -1512,40 +1514,69 @@ OdinAgent::wifi_decap (Packet *p)
     return 0;
   }
 
+  fprintf(stderr, "WiFi WEP CHECK BEFORE: %d\n", p_out->length());
+
+  for (int i = 0; i < p_out->length(); ++i)
+  {
+    fprintf(stderr, "%02hhx ", p_out->data()[i]);
+  }
+
   if (w->i_fc[1] & WIFI_FC1_WEP) {
+    fprintf(stderr, "\nWiFi WEP CHECK INSIDE\n");
+
     const unsigned char* payload = p_out->data() + (wifi_header_size + WIFI_CCMP_HEADERSIZE);
-    int payload_len = p_out->length() - (wifi_header_size + WIFI_CCMP_HEADERSIZE + WIFI_CCMP_MICLEN + 4);
+    int payload_len = p_out->length() - (wifi_header_size + WIFI_CCMP_HEADERSIZE + WIFI_CCMP_MICLEN);
 
     /* strip the CCMP header off */
     memmove((void *)(p_out->data() + wifi_header_size), payload, payload_len);
 
+  fprintf(stderr, "\npost-ccmp-header-strip: %d\n", p_out->length());    
+  for (int i = 0; i < p_out->length(); ++i)
+  {
+    fprintf(stderr, "%02hhx ", p_out->data()[i]);
+  }
+
+
     /* Strip the MIC off */
-    memmove((void *)(p_out->data() + (wifi_header_size + payload_len)), p_out->data()+ (p_out->length() - 4) , 4);
+    //memmove((void *)(p_out->data() + (wifi_header_size + payload_len)), p_out->data()+ (p_out->length() - 4) , 4);
+
+
+  // fprintf(stderr, "\npost-mic-strip: %d\n", p_out->length());    
+  // for (int i = 0; i < p_out->length(); ++i)
+  // {
+  //   fprintf(stderr, "%02hhx ", p_out->data()[i]);
+  // }
     
     /* strip the CCMP MIC and CCMP hdr off the tail of the packet */
     p_out->take(WIFI_CCMP_MICLEN + WIFI_CCMP_HEADERSIZE);
+
+
+  fprintf(stderr, "\npost-tail-strip: %d\n", p_out->length());    
+  for (int i = 0; i < p_out->length(); ++i)
+  {
+    fprintf(stderr, "%02hhx ", p_out->data()[i]);
+  }
 
     w = (struct click_wifi *) p_out->data();
     w->i_fc[1] &= ~WIFI_FC1_WEP;
   }
 
+  fprintf(stderr, "\nWiFi WEP CHECK AFTER: %d\n", p_out->length());
+
+
   uint16_t ether_type;
-  if (memcmp(WIFI_LLC_HEADER, p_out->data() + wifi_header_size,
-       WIFI_LLC_HEADER_LEN)) {
-    memcpy(&ether_type, p_out->data() + wifi_header_size + sizeof(click_llc) - 2, 2);
-  } else {
-    p_out->kill();
-    return 0;
-  }
+  memcpy(&ether_type, p_out->data() + wifi_header_size + sizeof(click_llc) - 2, 2);
 
   p_out->pull(wifi_header_size + sizeof(struct click_llc));
 
-  
+  fprintf(stderr, "WiFi decap push mac header before\n");
+
   p_out = p_out->push_mac_header(14);
   if (!p_out) {
     return 0;
   }
 
+fprintf(stderr, "WiFi decap push mac header after\n");
   memcpy(p_out->data(), dst.data(), 6);
   memcpy(p_out->data() + 6, src.data(), 6);
   memcpy(p_out->data() + 12, &ether_type, 2);
@@ -1675,7 +1706,6 @@ OdinAgent::push(int port, Packet *p)
       }
     }
     else if (type == WIFI_FC0_TYPE_DATA) {
-
       // This is a data frame, so we merely
       // filter against the VAPs.
       update_rx_stats(p);
@@ -1688,6 +1718,7 @@ OdinAgent::push(int port, Packet *p)
         return;
       }
 
+      fprintf(stderr, "Past STA check \n");
       /* We handle EAPOL frames but let everything else pass.
          TODO: We should probably have a port status on the LVAP? */
       uint16_t type = *(uint16_t *)(((uint8_t *)(w + 1)) + WIFI_LLC_HEADER_LEN);
@@ -1697,8 +1728,15 @@ OdinAgent::push(int port, Packet *p)
         return;
       }
 
+      fprintf(stderr, "WiFi Decap BEFORE \n");
+      Packet *p_out = wifi_decap(p);
+
+      if (p_out == 0)
+          return;
+
+      fprintf(stderr, "WiFi Decap AFTER \n");
       // There should be a WifiDecap element upstream.
-      output(1).push(p);
+      output(1).push(p_out);
       return;
     }
   }
