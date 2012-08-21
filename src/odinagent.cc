@@ -64,9 +64,12 @@ OdinAgent::run_timer (Timer*)
       = _sta_mapping_table.begin(); it.live(); it++)
    {
       // Note that the beacon is directed at the unicast address of the
-      // client corresponding to the VAP. This should
-      // prevent clients from seeing each others VAPs
-      send_beacon (it.key(), it.value()._vap_bssid, it.value()._vap_ssid, false);
+      // client corresponding to the LVAP. This should
+      // prevent clients from seeing each others LVAPs
+
+      for (int i = 0; i < it.value()._vap_ssids.size (); i++) {
+        send_beacon (it.key(), it.value()._vap_bssid, it.value()._vap_ssids[i], false);
+      }
    }
    
    _beacon_timer.reschedule_after_msec(_interval_ms);
@@ -142,7 +145,7 @@ OdinAgent::compute_bssid_mask()
  * return -1 if the STA is already assigned
  */
 int
-OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, String vap_ssid)
+OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssids)
 {
   // First make sure that this VAP isn't here already, in which
   // case we'll just ignore the request
@@ -155,7 +158,7 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   OdinStationState state;
   state._vap_bssid = sta_bssid;
   state._sta_ip_addr_v4 = sta_ip;
-  state._vap_ssid = vap_ssid;
+  state._vap_ssids = vap_ssids;
   _sta_mapping_table.set(sta_mac, state);
 
   // We need to prime the ARP responders
@@ -172,11 +175,25 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 
   // In case this invocation is in response to a page-faulted-probe-request,
   // then process the faulty packet
-  HashTable<EtherAddress, void *>::const_iterator it = _packet_buffer.find(sta_mac);
+  HashTable<EtherAddress, String>::const_iterator it = _packet_buffer.find(sta_mac);
   if (it != _packet_buffer.end()) {
-    _packet_buffer.erase(it.key());
     OdinStationState oss = _sta_mapping_table.get (sta_mac);
-    send_beacon (sta_mac, oss._vap_bssid, oss._vap_ssid, true);
+
+    if (it.value() == "") {
+      for (int i = 0; i < oss._vap_ssids.size(); i++) {
+        send_beacon(sta_mac, oss._vap_bssid, oss._vap_ssids[i], true);    
+      }
+    }
+    else {
+      for (int i = 0; i < oss._vap_ssids.size(); i++) {
+        if (oss._vap_ssids[i] == it.value()) {
+          send_beacon(sta_mac, oss._vap_bssid, it.value(), true);
+          break;
+        }
+      }
+    }
+
+    _packet_buffer.erase(it.key());
   }
 
   return 0;
@@ -191,13 +208,13 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
  * return -1 if the STA is already assigned
  */
 int
-OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, String vap_ssid)
+OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssids)
 {
   if (_debug) {
     fprintf(stderr, "set_vap (%s, %s, %s, %s)\n", sta_mac.unparse_colon().c_str()
                                                 , sta_ip.unparse().c_str()
                                                 , sta_bssid.unparse().c_str()
-                                                , vap_ssid.c_str());
+                                                , vap_ssids[0].c_str());
   }
 
   // First make sure that this VAP isn't here already, in which
@@ -211,7 +228,7 @@ OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   OdinStationState state;
   state._vap_bssid = sta_bssid;
   state._sta_ip_addr_v4 = sta_ip;
-  state._vap_ssid = vap_ssid;
+  state._vap_ssids = vap_ssids;
   _sta_mapping_table.set(sta_mac, state);
 
   // We need to update the ARP responder
@@ -304,21 +321,39 @@ OdinAgent::recv_probe_request (Packet *p)
 
   EtherAddress src = EtherAddress(w->i_addr2);
 
-  //If we're not aware of this VAP, then send to the controller.
-  // TODO: Need to garbage collect the buffer
+  //If we're not aware of this LVAP, then send to the controller.
   if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
     StringAccum sa;
     sa << "probe " << src.unparse_colon().c_str() << "\n";
     String payload = sa.take_string();
     WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
     output(3).push(odin_probe_packet);
-    _packet_buffer.set (src, NULL);
+    _packet_buffer.set (src, ssid);
     p->kill();
     return;
   }
 
   OdinStationState oss = _sta_mapping_table.get (src);
-  send_beacon(src, oss._vap_bssid, oss._vap_ssid, true);
+
+  /* If the client is performing an active scan, then
+   * then respond from all available SSIDs. Else, if
+   * the client is probing for a particular SSID, check
+   * if we're indeed hosting that SSID and respond
+   * accordingly. */
+
+  if (ssid == "") {
+    for (int i = 0; i < oss._vap_ssids.size(); i++) {
+      send_beacon(src, oss._vap_bssid, oss._vap_ssids[i], true);    
+    }
+  }
+  else {
+    for (int i = 0; i < oss._vap_ssids.size(); i++) {
+      if (oss._vap_ssids[i] == ssid) {
+        send_beacon(src, oss._vap_bssid, ssid, true);
+        break;
+      }
+    }
+  }
 
   p->kill();
   return;
@@ -524,59 +559,21 @@ OdinAgent::recv_assoc_request (Packet *p) {
   EtherAddress src = EtherAddress(w->i_addr2);
   EtherAddress bssid = EtherAddress(w->i_addr3);
 
-  OdinStationState oss = _sta_mapping_table.get (src);
+  OdinStationState *oss = _sta_mapping_table.get_pointer (src);
+
+  if (oss == NULL) {
+    p->kill();
+    return;
+  }
 
   String ssid;
-  String my_ssid = oss._vap_ssid;
+  String my_ssid = oss->_vap_ssids[0];
   if (ssid_l && ssid_l[1]) {
     ssid = String((char *) ssid_l + 2, WIFI_MIN((int)ssid_l[1], WIFI_NWID_MAXSIZE));
   } else {
     /* there was no element or it has zero length */
     ssid = "";
   }
-
-  StringAccum sa;
-
-
-  sa << "src " << src;
-  sa << " dst " << dst;
-  sa << " bssid " << bssid;
-  sa << "[ ";
-  if (capability & WIFI_CAPINFO_ESS) {
-    sa << "ESS ";
-  }
-  if (capability & WIFI_CAPINFO_IBSS) {
-    sa << "IBSS ";
-  }
-  if (capability & WIFI_CAPINFO_CF_POLLABLE) {
-    sa << "CF_POLLABLE ";
-  }
-  if (capability & WIFI_CAPINFO_CF_POLLREQ) {
-    sa << "CF_POLLREQ ";
-  }
-  if (capability & WIFI_CAPINFO_PRIVACY) {
-    sa << "PRIVACY ";
-  }
-  sa << "] ";
-
-  sa << " listen_int " << lint << " ";
-
-  sa << "( { ";
-  for (int x = 0; x < basic_rates.size(); x++) {
-    sa << basic_rates[x] << " ";
-  }
-  sa << "} ";
-  for (int x = 0; x < rates.size(); x++) {
-    sa << rates[x] << " ";
-  }
-
-  sa << ")\n";
-
-  // click_chatter("%{element}: request %s\n",
-  // this,
-  // sa.take_string().c_str());
-
-
 
   uint16_t associd = 0xc000 | _associd++;
 
@@ -1135,9 +1132,14 @@ OdinAgent::read_handler(Element *e, void *user_data)
           = agent->_sta_mapping_table.begin(); it.live(); it++)
         {
           sa << it.key().unparse_colon() 
-            <<  " " << it.value()._vap_bssid.unparse_colon() 
-            << " " << it.value()._vap_ssid
-            << " " << it.value()._sta_ip_addr_v4 << "\n";
+            << " " << it.value()._sta_ip_addr_v4
+            <<  " " << it.value()._vap_bssid.unparse_colon(); 
+
+          for (int i = 0; i < it.value()._vap_ssids.size(); i++) {
+            sa << " " << it.value()._vap_ssids[i];
+          }
+
+          sa << "\n";
         }
       break;
     }
@@ -1223,11 +1225,13 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
             {
               return -1;
             }
-
-        if (agent->add_vap (sta_mac, sta_ip, vap_bssid, vap_ssid) < 0)
-          {
-            return -1;
-          }
+      Vector<String> temp;
+      temp.push_back(vap_ssid);
+      
+      if (agent->add_vap (sta_mac, sta_ip, vap_bssid, temp) < 0)
+        {
+          return -1;
+        }
       break;
     }
     case handler_set_vap:{
@@ -1241,14 +1245,16 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
             .read_mp("VAP_BSSID", vap_bssid)
             .read_mp("VAP_SSID", vap_ssid)
             .complete() < 0)
-            {
-              return -1;
-            }
-
-        if (agent->set_vap (sta_mac, sta_ip, vap_bssid, vap_ssid) < 0)
-          {
-            return -1;
-          }
+        {
+          return -1;
+        }
+      Vector<String> temp;
+      temp.push_back(vap_ssid);
+      
+      if (agent->set_vap (sta_mac, sta_ip, vap_bssid, temp) < 0)
+        {
+          return -1;
+        }
       break;
     }
     case handler_remove_vap:{

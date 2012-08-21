@@ -63,7 +63,7 @@ public:
       //OdinStationState() {_vap_bssid = EtherAddress(); _sta_ip_addr_v4 = IPAddress(); _vap_ssid = String();}
       EtherAddress _vap_bssid;
       IPAddress _sta_ip_addr_v4; // Might need to change for v6
-      String _vap_ssid;
+      Vector<String> _vap_ssids;
   };
 
   enum relation_t {
@@ -96,8 +96,8 @@ public:
   void clear_subscriptions ();
 
   // Methods to add/remove VAPs.
-  int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, String sta_ssid);
-  int set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, String vap_ssid);
+  int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> sta_ssid);
+  int set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssid);
   int remove_vap (EtherAddress sta_mac);
 
   // Read/Write handlers
@@ -147,7 +147,7 @@ public:
   int _channel; // Channel to be shared by all VAPs.
   Vector<Subscription> _subscription_list;
   bool _debug;
-  HashTable<EtherAddress, void *> _packet_buffer;
+  HashTable<EtherAddress, String> _packet_buffer;
 
 private:
   void compute_bssid_mask ();
