@@ -1215,20 +1215,28 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       IPAddress sta_ip;
       EtherAddress sta_mac;
       EtherAddress vap_bssid;
-      String vap_ssid;
-      if (Args(agent, errh).push_back_words(str)
-        .read_mp("STA_MAC", sta_mac)
+      
+      Args args = Args(agent, errh).push_back_words(str);
+      if (args.read_mp("STA_MAC", sta_mac)
             .read_mp("STA_IP", sta_ip)
             .read_mp("VAP_BSSID", vap_bssid)
-            .read_mp("VAP_SSID", vap_ssid)
-            .complete() < 0)
-            {
-              return -1;
-            }
-      Vector<String> temp;
-      temp.push_back(vap_ssid);
+            .consume() < 0)
+        {
+          return -1;
+        }
+
+      Vector<String> ssidList;
+      while (!args.empty()) {
+        String vap_ssid;
+        if (args.read_mp("VAP_SSID", vap_ssid)
+              .consume() < 0)
+          {
+            return -1;
+          }
+        ssidList.push_back(vap_ssid);
+      }
       
-      if (agent->add_vap (sta_mac, sta_ip, vap_bssid, temp) < 0)
+      if (agent->add_vap (sta_mac, sta_ip, vap_bssid, ssidList) < 0)
         {
           return -1;
         }
@@ -1238,20 +1246,28 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       IPAddress sta_ip;
       EtherAddress sta_mac;
       EtherAddress vap_bssid;
-      String vap_ssid;
-      if (Args(agent, errh).push_back_words(str)
-        .read_mp("STA_MAC", sta_mac)
+      
+      Args args = Args(agent, errh).push_back_words(str);
+      if (args.read_mp("STA_MAC", sta_mac)
             .read_mp("STA_IP", sta_ip)
             .read_mp("VAP_BSSID", vap_bssid)
-            .read_mp("VAP_SSID", vap_ssid)
-            .complete() < 0)
+            .consume() < 0)
         {
           return -1;
         }
-      Vector<String> temp;
-      temp.push_back(vap_ssid);
+
+      Vector<String> ssidList;
+      while (!args.empty()) {
+        String vap_ssid;
+        if (args.read_mp("VAP_SSID", vap_ssid)
+              .consume() < 0)
+          {
+            return -1;
+          }
+        ssidList.push_back(vap_ssid);
+      }
       
-      if (agent->set_vap (sta_mac, sta_ip, vap_bssid, temp) < 0)
+      if (agent->set_vap (sta_mac, sta_ip, vap_bssid, ssidList) < 0)
         {
           return -1;
         }
