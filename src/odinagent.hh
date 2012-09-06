@@ -117,6 +117,7 @@ public:
     handler_interval,
     handler_subscriptions,
     handler_debug,
+    handler_probe_response,
   };
 
   // Rx-stats about stations

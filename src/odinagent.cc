@@ -32,9 +32,9 @@ CLICK_DECLS
 void cleanup_lvap (Timer *timer, void *);
 
 OdinAgent::OdinAgent()
-: _rtable(0),
+: _debug(false),
+  _rtable(0),
   _associd(0),
-  _debug(false),
   _beacon_timer(this)
 {
   _cleanup_timer.assign (&cleanup_lvap, (void *) this);
@@ -320,11 +320,11 @@ OdinAgent::recv_probe_request (Packet *p)
   }
 
   EtherAddress src = EtherAddress(w->i_addr2);
-
+  
   //If we're not aware of this LVAP, then send to the controller.
   if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
     StringAccum sa;
-    sa << "probe " << src.unparse_colon().c_str() << "\n";
+    sa << "probe " << src.unparse_colon().c_str() << " " << ssid << "\n";
     String payload = sa.take_string();
     WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
     output(3).push(odin_probe_packet);
@@ -341,12 +341,13 @@ OdinAgent::recv_probe_request (Packet *p)
    * if we're indeed hosting that SSID and respond
    * accordingly. */
 
-  if (ssid == "") {
-    for (int i = 0; i < oss._vap_ssids.size(); i++) {
-      send_beacon(src, oss._vap_bssid, oss._vap_ssids[i], true);    
-    }
-  }
-  else {
+  // if (ssid == "") {
+  //   for (int i = 0; i < oss._vap_ssids.size(); i++) {
+  //     send_beacon(src, oss._vap_bssid, oss._vap_ssids[i], true);    
+  //   }
+  // }
+
+  if (ssid != "") {
     for (int i = 0; i < oss._vap_ssids.size(); i++) {
       if (oss._vap_ssids[i] == ssid) {
         send_beacon(src, oss._vap_bssid, ssid, true);
@@ -368,7 +369,7 @@ OdinAgent::recv_probe_request (Packet *p)
  */
 void
 OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe) {
-
+//  fprintf(stderr, "HAAAI I'm A PROBE RESPONSE dst:%s bssid:%s my_ssid:%s\n", dst.unparse_colon().c_str(),bssid.unparse_colon().c_str(), my_ssid.c_str());
   Vector<int> rates = _rtable->lookup(bssid);
 
   /* order elements by standard
@@ -717,6 +718,17 @@ OdinAgent::recv_open_auth_request (Packet *p) {
       // this,
       // algo,
       // seq);
+    p->kill();
+    return;
+  }
+
+  //If we're not aware of this LVAP, then send to the controller.
+  if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
+    StringAccum sa;
+    sa << "auth " << src.unparse_colon().c_str() << "\n";
+    String payload = sa.take_string();
+    WritablePacket *odin_auth_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
+    output(3).push(odin_auth_packet);
     p->kill();
     return;
   }
@@ -1359,6 +1371,35 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       agent->_debug = debug;
       break;
     }
+    case handler_probe_response: {
+
+      EtherAddress sta_mac;
+      EtherAddress vap_bssid;
+      
+      Args args = Args(agent, errh).push_back_words(str);
+      if (args.read_mp("STA_MAC", sta_mac)
+            .read_mp("VAP_BSSID", vap_bssid)
+            .consume() < 0)
+        {
+          return -1;
+        }
+
+      Vector<String> ssidList;
+      while (!args.empty()) {
+        String vap_ssid;
+        if (args.read_mp("VAP_SSID", vap_ssid)
+              .consume() < 0)
+          {
+            return -1;
+          }
+        ssidList.push_back(vap_ssid);
+      }
+
+      for (Vector<String>::const_iterator it = ssidList.begin();
+            it != ssidList.end(); it++) {
+        agent->send_beacon (sta_mac, vap_bssid, *it, true);
+      }
+    }
   }
   return 0;
 }
@@ -1381,6 +1422,7 @@ OdinAgent::add_handlers()
   add_write_handler("interval", write_handler, handler_interval);
   add_write_handler("subscriptions", write_handler, handler_subscriptions);
   add_write_handler("debug", write_handler, handler_debug);
+  add_write_handler("send_probe_response", write_handler, handler_probe_response);
 }
 
 
