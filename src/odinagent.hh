@@ -118,6 +118,7 @@ public:
     handler_subscriptions,
     handler_debug,
     handler_probe_response,
+    handler_probe_request,    
   };
 
   // Rx-stats about stations
@@ -160,6 +161,7 @@ private:
   Timer _beacon_timer;
   Timer _cleanup_timer;
   IPAddress _default_gw_addr;
+  String _debugfs_string;
 };
 
 

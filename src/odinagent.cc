@@ -35,7 +35,8 @@ OdinAgent::OdinAgent()
 : _debug(false),
   _rtable(0),
   _associd(0),
-  _beacon_timer(this)
+  _beacon_timer(this),
+  _debugfs_string("")
 {
   _cleanup_timer.assign (&cleanup_lvap, (void *) this);
 }
@@ -89,6 +90,7 @@ OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
   .read_m("RT", ElementCastArg("AvailableRates"), _rtable)
   .read_m("CHANNEL", _channel)
   .read_m("DEFAULT_GW", _default_gw_addr)
+  .read_m("DEBUGFS", _debugfs_string)
   .complete() < 0)
   return -1;
   
@@ -128,7 +130,7 @@ OdinAgent::compute_bssid_mask()
    }
   
   // Update bssid mask register through debugfs 
-  FILE *debugfs_file = fopen ("/sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra","w");
+  FILE *debugfs_file = fopen (_debugfs_string.c_str(),"w");
     
   if (debugfs_file!=NULL)
     {
@@ -369,7 +371,6 @@ OdinAgent::recv_probe_request (Packet *p)
  */
 void
 OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe) {
-//  fprintf(stderr, "HAAAI I'm A PROBE RESPONSE dst:%s bssid:%s my_ssid:%s\n", dst.unparse_colon().c_str(),bssid.unparse_colon().c_str(), my_ssid.c_str());
   Vector<int> rates = _rtable->lookup(bssid);
 
   /* order elements by standard
@@ -1399,6 +1400,33 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
             it != ssidList.end(); it++) {
         agent->send_beacon (sta_mac, vap_bssid, *it, true);
       }
+      break;
+    }
+    case handler_probe_request: {
+      EtherAddress sta_mac;
+      String ssid = "";
+
+      Args args = Args(agent, errh).push_back_words(str);
+
+      if (args.read_mp("STA_MAC", sta_mac)
+          .consume() < 0)
+        {
+          return -1;
+        }
+
+      if (!args.empty()) {
+        if (args.read_mp("SSID", ssid)
+              .consume() < 0)
+          {
+            return -1;
+          }
+      }
+      StringAccum sa;
+      sa << "probe " << sta_mac.unparse_colon().c_str() << " " << ssid << "\n";
+      String payload = sa.take_string();
+      WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
+      agent->output(3).push(odin_probe_packet);
+      break;
     }
   }
   return 0;
@@ -1423,6 +1451,7 @@ OdinAgent::add_handlers()
   add_write_handler("subscriptions", write_handler, handler_subscriptions);
   add_write_handler("debug", write_handler, handler_debug);
   add_write_handler("send_probe_response", write_handler, handler_probe_response);
+  add_write_handler("testing_send_probe_request", write_handler, handler_probe_request);
 }
 
 
