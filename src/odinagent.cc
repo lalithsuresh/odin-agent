@@ -131,7 +131,9 @@ OdinAgent::compute_bssid_mask()
   
   // Update bssid mask register through debugfs 
   FILE *debugfs_file = fopen (_debugfs_string.c_str(),"w");
-    
+  
+
+
   if (debugfs_file!=NULL)
     {
       fprintf(stderr, "%s\n", EtherAddress (bssid_mask).unparse_colon().c_str());
@@ -508,6 +510,17 @@ void
 OdinAgent::recv_assoc_request (Packet *p) {
   struct click_wifi *w = (struct click_wifi *) p->data();
 
+  EtherAddress dst = EtherAddress(w->i_addr1);
+  EtherAddress src = EtherAddress(w->i_addr2);
+  EtherAddress bssid = EtherAddress(w->i_addr3);
+
+  // Do not respond to node who's LVAP we're not
+  // hosting.
+  if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
+    p->kill();
+    return;
+  }
+
   uint8_t *ptr;
 
   ptr = (uint8_t *) p->data() + sizeof(struct click_wifi);
@@ -556,10 +569,6 @@ OdinAgent::recv_assoc_request (Packet *p) {
           all_rates.push_back((int)(rate & WIFI_RATE_VAL));
     }
   }
-
-  EtherAddress dst = EtherAddress(w->i_addr1);
-  EtherAddress src = EtherAddress(w->i_addr2);
-  EtherAddress bssid = EtherAddress(w->i_addr3);
 
   OdinStationState *oss = _sta_mapping_table.get_pointer (src);
 
@@ -705,6 +714,13 @@ OdinAgent::recv_open_auth_request (Packet *p) {
 
 
   EtherAddress src = EtherAddress(w->i_addr2);
+
+  //If we're not aware of this LVAP, ignore
+  if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
+    p->kill();
+    return;
+  }
+
   if (algo != WIFI_AUTH_ALG_OPEN) {
     // click_chatter("%{element}: auth %d from %s not supported\n",
       // this,
@@ -719,17 +735,6 @@ OdinAgent::recv_open_auth_request (Packet *p) {
       // this,
       // algo,
       // seq);
-    p->kill();
-    return;
-  }
-
-  //If we're not aware of this LVAP, then send to the controller.
-  if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
-    StringAccum sa;
-    sa << "auth " << src.unparse_colon().c_str() << "\n";
-    String payload = sa.take_string();
-    WritablePacket *odin_auth_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
-    output(3).push(odin_auth_packet);
     p->kill();
     return;
   }
