@@ -118,7 +118,10 @@ public:
     handler_subscriptions,
     handler_debug,
     handler_probe_response,
-    handler_probe_request,    
+    handler_probe_request, 
+    handler_report_mean, 
+    handler_update_signal_strength,
+    handler_signal_strength_offset,
   };
 
   // Rx-stats about stations
@@ -139,6 +142,13 @@ public:
   // All VAP related information should be accessible here on
   // a per client basis
   HashTable<EtherAddress, OdinStationState> _sta_mapping_table;
+  HashTable<EtherAddress, Timestamp> _mean_table;
+
+  // For stat collection
+  double _mean;
+  double _num_mean;
+  double _m2; // for estimated variance
+  int _signal_offset;
 
   // Keep track of rx-statistics of stations from which
   // we hear frames. Only keeping track of data frames for
@@ -150,10 +160,10 @@ public:
   Vector<Subscription> _subscription_list;
   bool _debug;
   HashTable<EtherAddress, String> _packet_buffer;
+  void match_against_subscriptions(StationStats stats, EtherAddress src);
 
 private:
   void compute_bssid_mask ();
-  void match_against_subscriptions(StationStats stats, EtherAddress src);
   void update_rx_stats(Packet *p);
   EtherAddress _hw_mac_addr;
   class AvailableRates *_rtable;

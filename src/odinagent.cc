@@ -32,7 +32,11 @@ CLICK_DECLS
 void cleanup_lvap (Timer *timer, void *);
 
 OdinAgent::OdinAgent()
-: _debug(false),
+: _mean(0),
+  _num_mean(0),
+  _m2(0),
+  _signal_offset(0),
+  _debug(false),
   _rtable(0),
   _associd(0),
   _beacon_timer(this),
@@ -351,7 +355,7 @@ OdinAgent::recv_probe_request (Packet *p)
   //   }
   // }
 
-  if (ssid != "") {
+  if (ssid != "") { 
     for (int i = 0; i < oss._vap_ssids.size(); i++) {
       if (oss._vap_ssids[i] == ssid) {
         send_beacon(src, oss._vap_bssid, ssid, true);
@@ -497,6 +501,24 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
   }
 
   p->take(max_len - actual_length);
+
+  Timestamp now = Timestamp::now();
+  Timestamp old =  _mean_table.get (dst);
+
+  if (old != NULL) {
+
+    Timestamp diff = now - old;
+    double new_val = diff.sec() * 1000000000 + diff.usec();
+
+    fprintf(stderr, "Out: %f\n", new_val);
+
+    _num_mean++;
+    double delta = new_val - _mean;
+    _mean = _mean + delta/_num_mean;
+    _m2 = _m2 + delta * (new_val - _mean);
+    _mean_table.erase (dst);
+  }
+
   output(0).push(p);
 }
 
@@ -878,7 +900,7 @@ OdinAgent::update_rx_stats(Packet *p)
 
   stat._rate = ceh->rate;
   stat._noise = ceh->silence;
-  stat._signal = ceh->rssi;
+  stat._signal = ceh->rssi + _signal_offset;
   stat._packets++;
   stat._last_received.assign_now();
 
@@ -927,33 +949,31 @@ OdinAgent::push(int port, Packet *p)
     struct click_wifi *w = (struct click_wifi *) p->data();
 
     EtherAddress src = EtherAddress(w->i_addr2);
-    struct click_wifi_extra *ceh = WIFI_EXTRA_ANNO(p);
+    // struct click_wifi_extra *ceh = WIFI_EXTRA_ANNO(p);
 
-    StationStats stat;
-    HashTable<EtherAddress, StationStats>::const_iterator it = _rx_stats.find(src);
-    if (it == _rx_stats.end())
-      stat = StationStats();
-    else
-      stat = it.value();
+    // StationStats stat;
+    // HashTable<EtherAddress, StationStats>::const_iterator it = _rx_stats.find(src);
+    // if (it == _rx_stats.end())
+    //   stat = StationStats();
+    // else
+    //   stat = it.value();
 
-    stat._rate = ceh->rate;
-    stat._noise = ceh->silence;
-    stat._signal = ceh->rssi;
-    stat._packets++;
-    stat._last_received.assign_now();
-
-    match_against_subscriptions(stat, src);
-
-    _rx_stats.set (src, stat);
+    // stat._rate = ceh->rate;
+    // stat._noise = ceh->silence;
+    // stat._signal = ceh->rssi + _signal_offset;
+    // stat._packets++;
+    // stat._last_received.assign_now();
+    
+    // _rx_stats.set (src, stat);
+    update_rx_stats(p);
 
     type = w->i_fc[0] & WIFI_FC0_TYPE_MASK;
     subtype = w->i_fc[0] & WIFI_FC0_SUBTYPE_MASK;
   
     if (type == WIFI_FC0_TYPE_MGT) {
+
       // This is a management frame, now
       // we classify by subtype
-      update_rx_stats(p);
-
       switch (subtype) {
         case WIFI_FC0_SUBTYPE_PROBE_REQ:
           {
@@ -985,8 +1005,6 @@ OdinAgent::push(int port, Packet *p)
 
       // This is a data frame, so we merely
       // filter against the VAPs.
-      update_rx_stats(p);
-
       if (_sta_mapping_table.find (src) == _sta_mapping_table.end()) {
         // FIXME: Inform controller accordingly? We'll need this
         // for roaming.
@@ -1217,6 +1235,11 @@ OdinAgent::read_handler(Element *e, void *user_data)
       sa << agent->_debug << "\n";
       break;
     }
+    case handler_report_mean: {
+      double variance = agent->_m2 / (agent->_num_mean -1);
+      sa << agent->_mean <<  " " <<  agent->_num_mean << " " << variance << "\n";
+      break;
+    }
   }
 
   return sa.take_string();
@@ -1429,8 +1452,53 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       StringAccum sa;
       sa << "probe " << sta_mac.unparse_colon().c_str() << " " << ssid << "\n";
       String payload = sa.take_string();
+
+      agent->_mean_table.set (sta_mac, Timestamp::now());
       WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
       agent->output(3).push(odin_probe_packet);
+      break;
+    }
+    case handler_update_signal_strength: {
+      EtherAddress sta_mac;
+      int value;
+      
+      Args args = Args(agent, errh).push_back_words(str);
+
+      if (args.read_mp("STA_MAC", sta_mac)
+          .read_mp("VALUE", value)
+          .consume() < 0)
+        {
+          return -1;
+        }      
+
+      StationStats stat;
+      HashTable<EtherAddress, StationStats>::const_iterator it = agent->_rx_stats.find(sta_mac);
+
+      if (it == agent->_rx_stats.end())
+        stat = StationStats();
+      else
+        stat = it.value();
+
+      stat._signal = value;
+      stat._packets++;
+      stat._last_received.assign_now();
+
+      agent->match_against_subscriptions(stat, sta_mac);
+      agent->_rx_stats.set (sta_mac, stat);
+
+      break;
+    }
+    case handler_signal_strength_offset: {
+      int value;
+      Args args = Args(agent, errh).push_back_words(str);
+
+      if (args.read_mp("VALUE", value)
+          .consume() < 0)
+        {
+          return -1;
+        }
+
+      agent->_signal_offset = value;
       break;
     }
   }
@@ -1447,6 +1515,7 @@ OdinAgent::add_handlers()
   add_read_handler("rxstats", read_handler, handler_rxstat);
   add_read_handler("subscriptions", read_handler, handler_subscriptions);
   add_read_handler("debug", read_handler, handler_debug);
+  add_read_handler("report_mean", read_handler, handler_report_mean);
 
   add_write_handler("add_vap", write_handler, handler_add_vap);
   add_write_handler("set_vap", write_handler, handler_set_vap);
@@ -1457,6 +1526,8 @@ OdinAgent::add_handlers()
   add_write_handler("debug", write_handler, handler_debug);
   add_write_handler("send_probe_response", write_handler, handler_probe_response);
   add_write_handler("testing_send_probe_request", write_handler, handler_probe_request);
+  add_write_handler("handler_update_signal_strength", write_handler, handler_update_signal_strength);
+  add_write_handler("signal_strength_offset", write_handler, handler_signal_strength_offset);
 }
 
 
