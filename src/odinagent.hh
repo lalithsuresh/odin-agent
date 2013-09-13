@@ -118,10 +118,11 @@ public:
     handler_subscriptions,
     handler_debug,
     handler_probe_response,
-    handler_probe_request, 
-    handler_report_mean, 
+    handler_probe_request,
+    handler_report_mean,
     handler_update_signal_strength,
     handler_signal_strength_offset,
+    handler_spectral_scan,
   };
 
   // Rx-stats about stations

@@ -11,7 +11,7 @@
  * preserve this copyright notice, and you cannot mention the copyright
  * holders in advertising related to the Software without their permission.
  * The Software is provided WITHOUT ANY WARRANTY, EXPRESS OR IMPLIED. This
- * notice is a summary of the Click LICENSE file; the license in that file is 
+ * notice is a summary of the Click LICENSE file; the license in that file is
  * legally binding.
  */
 
@@ -25,6 +25,10 @@
 #include <clicknet/ether.h>
 #include <clicknet/llc.h>
 #include "odinagent.hh"
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
 
 CLICK_DECLS
 
@@ -65,7 +69,7 @@ OdinAgent::initialize(ErrorHandler*)
 void
 OdinAgent::run_timer (Timer*)
 {
-  for (HashTable<EtherAddress, OdinStationState>::iterator it 
+  for (HashTable<EtherAddress, OdinStationState>::iterator it
       = _sta_mapping_table.begin(); it.live(); it++)
    {
       // Note that the beacon is directed at the unicast address of the
@@ -76,7 +80,7 @@ OdinAgent::run_timer (Timer*)
         send_beacon (it.key(), it.value()._vap_bssid, it.value()._vap_ssids[i], false);
       }
    }
-   
+
    _beacon_timer.reschedule_after_msec(_interval_ms);
 }
 
@@ -86,7 +90,7 @@ OdinAgent::run_timer (Timer*)
  */
 int
 OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
-{ 
+{
   _interval_ms = 5000;
   _channel = 6;
   if (Args(conf, this, errh)
@@ -97,7 +101,7 @@ OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
   .read_m("DEBUGFS", _debugfs_string)
   .complete() < 0)
   return -1;
-  
+
   return 0;
 }
 
@@ -114,14 +118,14 @@ OdinAgent::compute_bssid_mask()
   int i;
 
   // Start with a mask of ff:ff:ff:ff:ff:ff
-  for (i = 0; i < 6; i++) 
+  for (i = 0; i < 6; i++)
     {
       bssid_mask[i] = 0xff;
     }
 
   // For each VAP, update the bssid mask to include
   // the common bits of all VAPs.
-  for (HashTable<EtherAddress, OdinStationState>::iterator it 
+  for (HashTable<EtherAddress, OdinStationState>::iterator it
       = _sta_mapping_table.begin(); it.live(); it++)
    {
      for (i = 0; i < 6; i++)
@@ -130,12 +134,12 @@ OdinAgent::compute_bssid_mask()
           const uint8_t *bssid= (const uint8_t *)it.value()._vap_bssid.data();
           bssid_mask[i] &= ~(hw[i] ^ bssid[i]);
         }
-  
+
    }
-  
-  // Update bssid mask register through debugfs 
+
+  // Update bssid mask register through debugfs
   FILE *debugfs_file = fopen (_debugfs_string.c_str(),"w");
-  
+
 
 
   if (debugfs_file!=NULL)
@@ -146,7 +150,7 @@ OdinAgent::compute_bssid_mask()
     }
 }
 
-/** 
+/**
  * Invoking this implies adding a client
  * to the VAP.
  *
@@ -189,7 +193,7 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 
     if (it.value() == "") {
       for (int i = 0; i < oss._vap_ssids.size(); i++) {
-        send_beacon(sta_mac, oss._vap_bssid, oss._vap_ssids[i], true);    
+        send_beacon(sta_mac, oss._vap_bssid, oss._vap_ssids[i], true);
       }
     }
     else {
@@ -208,7 +212,7 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 }
 
 
-/** 
+/**
  * Invoking this implies updating a client's
  * details. To be used primarily to update
  * a client's IP address
@@ -250,7 +254,7 @@ OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 }
 
 
-/** 
+/**
  * Invoking this implies knocking
  * a client off the access point
  */
@@ -262,7 +266,7 @@ OdinAgent::remove_vap (EtherAddress sta_mac)
   }
 
   HashTable<EtherAddress, OdinStationState>::iterator it = _sta_mapping_table.find (sta_mac);
-      
+
   // VAP doesn't exist on this node. Ignore.
   if (it == _sta_mapping_table.end())
     return -1;
@@ -273,7 +277,7 @@ OdinAgent::remove_vap (EtherAddress sta_mac)
   HandlerCall::call_write (r->find("fh_arpr"), "remove", it.value()._sta_ip_addr_v4.unparse() + "/32");
 
   _sta_mapping_table.erase (it);
-  
+
   // Remove this VAP's BSSID from the mask
   compute_bssid_mask();
 
@@ -284,10 +288,10 @@ OdinAgent::remove_vap (EtherAddress sta_mac)
   }
 
   return 0;
-} 
+}
 
 
-/** 
+/**
  * Handle a probe request. This code is
  * borrowed from the ProbeResponder element
  * and is modified to retrieve the BSSID/SSID
@@ -328,7 +332,7 @@ OdinAgent::recv_probe_request (Packet *p)
   }
 
   EtherAddress src = EtherAddress(w->i_addr2);
-  
+
   //If we're not aware of this LVAP, then send to the controller.
   if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
     StringAccum sa;
@@ -351,11 +355,11 @@ OdinAgent::recv_probe_request (Packet *p)
 
   // if (ssid == "") {
   //   for (int i = 0; i < oss._vap_ssids.size(); i++) {
-  //     send_beacon(src, oss._vap_bssid, oss._vap_ssids[i], true);    
+  //     send_beacon(src, oss._vap_bssid, oss._vap_ssids[i], true);
   //   }
   // }
 
-  if (ssid != "") { 
+  if (ssid != "") {
     for (int i = 0; i < oss._vap_ssids.size(); i++) {
       if (oss._vap_ssids[i] == ssid) {
         send_beacon(src, oss._vap_bssid, ssid, true);
@@ -369,7 +373,7 @@ OdinAgent::recv_probe_request (Packet *p)
 }
 
 
-/** 
+/**
  * Send a beacon/probe-response. This code is
  * borrowed from the BeaconSource element
  * and is modified to retrieve the BSSID/SSID
@@ -522,7 +526,7 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
   output(0).push(p);
 }
 
-/** 
+/**
  * Receive an association request. This code is
  * borrowed from the AssociationResponder element
  * and is modified to retrieve the BSSID/SSID
@@ -616,7 +620,7 @@ OdinAgent::recv_assoc_request (Packet *p) {
 }
 
 
-/** 
+/**
  * Send an association request. This code is
  * borrowed from the AssociationResponder element
  * and is modified to retrieve the BSSID/SSID
@@ -709,7 +713,7 @@ OdinAgent::send_assoc_response (EtherAddress dst, uint16_t status, uint16_t asso
 }
 
 
-/** 
+/**
  * Receive an Open Auth request. This code is
  * borrowed from the OpenAuthResponder element
  * and is modified to retrieve the BSSID/SSID
@@ -768,7 +772,7 @@ OdinAgent::recv_open_auth_request (Packet *p) {
 }
 
 
-/** 
+/**
  * Send an Open Auth request. This code is
  * borrowed from the OpenAuthResponder element
  * and is modified to retrieve the BSSID/SSID
@@ -776,7 +780,7 @@ OdinAgent::recv_open_auth_request (Packet *p) {
  */
 void
 OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t status) {
-  
+
   OdinStationState oss = _sta_mapping_table.get (dst);
 
   int len = sizeof (struct click_wifi) +
@@ -820,7 +824,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
 }
 
 
-/** 
+/**
  * Encapsulate an ethernet frame with a 802.11 header.
  * Borrowed from WifiEncap element.
  * NOTE: This method uses the FromDS mode (0x02)
@@ -909,7 +913,7 @@ OdinAgent::update_rx_stats(Packet *p)
   _rx_stats.set (src, stat);
 }
 
-/** 
+/**
  * This element has two input ports and 4 output ports.
  *
  * In-port-0: Any 802.11 encapsulated frame. Expected
@@ -934,7 +938,7 @@ OdinAgent::push(int port, Packet *p)
   // frame, and could be of type data or Mgmnt.
   // We filter data frames by available VAPs,
   // and we handle Mgmnt frames accordingly.
-  
+
   if (port == 0) {
     // if port == 0, paket is coming from the lower layer
 
@@ -963,13 +967,13 @@ OdinAgent::push(int port, Packet *p)
     // stat._signal = ceh->rssi + _signal_offset;
     // stat._packets++;
     // stat._last_received.assign_now();
-    
+
     // _rx_stats.set (src, stat);
     update_rx_stats(p);
 
     type = w->i_fc[0] & WIFI_FC0_TYPE_MASK;
     subtype = w->i_fc[0] & WIFI_FC0_SUBTYPE_MASK;
-  
+
     if (type == WIFI_FC0_TYPE_MGT) {
 
       // This is a management frame, now
@@ -1031,10 +1035,10 @@ OdinAgent::push(int port, Packet *p)
     if (_sta_mapping_table.find (eth) != _sta_mapping_table.end ())
     {
       OdinStationState oss = _sta_mapping_table.get (eth);
-        
+
       // If the client tried to make an ARP request for
       // its default gateway, and there is a response coming from
-      // upstream, we have to correct the resolved hw-addr with the 
+      // upstream, we have to correct the resolved hw-addr with the
       // VAP-BSSID to which the client corresponds.
       // This assumes there is an ARP responder element upstream
       // that can handle the _default_gw_addr
@@ -1043,7 +1047,7 @@ OdinAgent::push(int port, Packet *p)
         if (ntohs(ea->ea_hdr.ar_hrd) == ARPHRD_ETHER
             && ntohs(ea->ea_hdr.ar_pro) == ETHERTYPE_IP
             && ntohs(ea->ea_hdr.ar_op) == ARPOP_REPLY) {
-          
+
           IPAddress ipa = IPAddress(ea->arp_spa);
           if (ipa == _default_gw_addr)
             memcpy(ea->arp_sha, oss._vap_bssid.data(), 6);
@@ -1088,7 +1092,7 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
 
   for (Vector<OdinAgent::Subscription>::const_iterator iter = _subscription_list.begin();
            iter != _subscription_list.end(); iter++) {
-    
+
     Subscription sub = *iter;
 
     if (sub.sta_addr != EtherAddress() && sub.sta_addr != src)
@@ -1126,7 +1130,7 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
           subscription_matches <<  " " << sub.subscription_id << ":" << stats._packets;
           count++;
         }
-        break; 
+        break;
       }
       case LESSER_THAN: {
         if (sub.statistic == "signal" && stats._signal < sub.val) {
@@ -1164,12 +1168,12 @@ OdinAgent::read_handler(Element *e, void *user_data)
 
   switch (reinterpret_cast<uintptr_t>(user_data)) {
     case handler_view_mapping_table: {
-      for (HashTable<EtherAddress, OdinStationState>::iterator it 
+      for (HashTable<EtherAddress, OdinStationState>::iterator it
           = agent->_sta_mapping_table.begin(); it.live(); it++)
         {
-          sa << it.key().unparse_colon() 
+          sa << it.key().unparse_colon()
             << " " << it.value()._sta_ip_addr_v4
-            <<  " " << it.value()._vap_bssid.unparse_colon(); 
+            <<  " " << it.value()._vap_bssid.unparse_colon();
 
           for (int i = 0; i < it.value()._vap_ssids.size(); i++) {
             sa << " " << it.value()._vap_ssids[i];
@@ -1219,7 +1223,7 @@ OdinAgent::read_handler(Element *e, void *user_data)
 
       for (Vector<OdinAgent::Subscription>::const_iterator iter = agent->_subscription_list.begin();
            iter != agent->_subscription_list.end(); iter++) {
-        
+
         OdinAgent::Subscription sub = *iter;
         sa << "sub_id " << sub.subscription_id;
         sa << " addr " << sub.sta_addr.unparse_colon();
@@ -1240,6 +1244,28 @@ OdinAgent::read_handler(Element *e, void *user_data)
       sa << agent->_mean <<  " " <<  agent->_num_mean << " " << variance << "\n";
       break;
     }
+    case handler_spectral_scan: {
+      // reads spectral scan
+
+      FILE *in;
+      if (!(in = popen("/root/scan","r"))) {
+        fprintf(stderr, "popen() failed\n");
+      }
+
+      pclose(in);
+
+      // read file and return big_string
+      std::ifstream in_file("/tmp/spectral_scan");
+      if (!in_file.is_open()){
+        fprintf(stderr, "Could not open /tmp/spectral_scan\n");
+        return "";
+      }
+      std::stringstream buffer;
+      buffer << in_file.rdbuf();
+      sa << buffer.str().c_str();
+
+      break;
+    }
   }
 
   return sa.take_string();
@@ -1256,7 +1282,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       IPAddress sta_ip;
       EtherAddress sta_mac;
       EtherAddress vap_bssid;
-      
+
       Args args = Args(agent, errh).push_back_words(str);
       if (args.read_mp("STA_MAC", sta_mac)
             .read_mp("STA_IP", sta_ip)
@@ -1276,7 +1302,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           }
         ssidList.push_back(vap_ssid);
       }
-      
+
       if (agent->add_vap (sta_mac, sta_ip, vap_bssid, ssidList) < 0)
         {
           return -1;
@@ -1287,7 +1313,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       IPAddress sta_ip;
       EtherAddress sta_mac;
       EtherAddress vap_bssid;
-      
+
       Args args = Args(agent, errh).push_back_words(str);
       if (args.read_mp("STA_MAC", sta_mac)
             .read_mp("STA_IP", sta_ip)
@@ -1307,7 +1333,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           }
         ssidList.push_back(vap_ssid);
       }
-      
+
       if (agent->set_vap (sta_mac, sta_ip, vap_bssid, ssidList) < 0)
         {
           return -1;
@@ -1350,7 +1376,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           return -1;
         }
 
-      agent->_interval_ms = interval;     
+      agent->_interval_ms = interval;
       break;
     }
     case handler_subscriptions: {
@@ -1365,7 +1391,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
         {
           return -1;
         }
-      
+
       fprintf(stderr, "num_rows: %d\n", num_rows);
       for (int i = 0; i < num_rows; i++) {
         long sub_id;
@@ -1396,7 +1422,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       bool debug;
       if (!BoolArg().parse(str, debug))
         return -1;
-      
+
       agent->_debug = debug;
       break;
     }
@@ -1404,7 +1430,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
 
       EtherAddress sta_mac;
       EtherAddress vap_bssid;
-      
+
       Args args = Args(agent, errh).push_back_words(str);
       if (args.read_mp("STA_MAC", sta_mac)
             .read_mp("VAP_BSSID", vap_bssid)
@@ -1461,7 +1487,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
     case handler_update_signal_strength: {
       EtherAddress sta_mac;
       int value;
-      
+
       Args args = Args(agent, errh).push_back_words(str);
 
       if (args.read_mp("STA_MAC", sta_mac)
@@ -1469,7 +1495,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           .consume() < 0)
         {
           return -1;
-        }      
+        }
 
       StationStats stat;
       HashTable<EtherAddress, StationStats>::const_iterator it = agent->_rx_stats.find(sta_mac);
@@ -1501,6 +1527,27 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       agent->_signal_offset = value;
       break;
     }
+    case handler_spectral_scan: {
+      // - First write 'chanscan' to debugfs_file
+      // - Perform iw dev scan0 scan
+      // - We write 'disable' to the file only upon reading
+      FILE *spectral_scan_ctl_file = fopen ("/sys/kernel/debug/ieee80211/phy1/ath9k/spectral_scan_ctl","w");
+
+      if (!spectral_scan_ctl_file) {
+        fprintf(stderr, "Could not open spectral_scan_ctl file\n");
+        return -1;
+      }
+
+      fprintf(spectral_scan_ctl_file, "chanscan");
+      fclose (spectral_scan_ctl_file);
+
+      FILE *in;
+      if (!(in = popen("iw dev scan0 scan > /dev/null","r"))) {
+        fprintf(stderr, "popen() failed\n");
+      }
+
+      pclose(in);
+    }
   }
   return 0;
 }
@@ -1516,6 +1563,7 @@ OdinAgent::add_handlers()
   add_read_handler("subscriptions", read_handler, handler_subscriptions);
   add_read_handler("debug", read_handler, handler_debug);
   add_read_handler("report_mean", read_handler, handler_report_mean);
+  add_read_handler("spectral_scan", read_handler, handler_spectral_scan);
 
   add_write_handler("add_vap", write_handler, handler_add_vap);
   add_write_handler("set_vap", write_handler, handler_set_vap);
@@ -1528,6 +1576,7 @@ OdinAgent::add_handlers()
   add_write_handler("testing_send_probe_request", write_handler, handler_probe_request);
   add_write_handler("handler_update_signal_strength", write_handler, handler_update_signal_strength);
   add_write_handler("signal_strength_offset", write_handler, handler_signal_strength_offset);
+  add_write_handler("spectral_scan", write_handler, handler_spectral_scan);
 }
 
 
@@ -1544,7 +1593,7 @@ cleanup_lvap (Timer *timer, void *data)
   {
     Timestamp now = Timestamp::now();
     Timestamp age = now - iter.value()._last_received;
-    
+
     if (age.sec() > 30)
     {
       buf.push_back (iter.key());
