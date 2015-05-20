@@ -13,34 +13,34 @@ import sys
 if (len(sys.argv) != 7):
     print 'Usage:'
     print ''
-    print '%s <AP_CHANNEL> <QUEUE_SIZE> <HW_ADDR> <ODIN_MASTER_IP> <ODIN_MASTER_PORT> <DEFUGFS_PATH>' %(sys.argv[0])
+    print '%s <AP_CHANNEL> <QUEUE_SIZE> <HW_ADDR> <ODIN_MASTER_IP> <ODIN_MASTER_PORT> <DEBUGFS_FILE>' %(sys.argv[0])
     print ''
     print 'AP_CHANNEL: it must be the same where mon0 of the AP is placed'
     print 'QUEUE_SIZE: you can use the size 50'
     print 'HW_ADDR: the MAC of the wireless interface mon0 of the AP. e.g. 74-F0-6E-20-D4-74'
     print 'ODIN_MASTER_IP is the IP of the openflow controller where Odin master is running'
     print 'ODIN_MASTER_PORT should be 2819 by default'
-    print 'DEBUGFS_PATH is the path of the bssid_extra file created by the ath9k patch'	
-    print '             it can be /sys/kernel/debug/ieee80211/phy0/ath9k/'
+    print 'DEBUGFS_FILE is the path of the bssid_extra file created by the ath9k patch'	
+    print '             it can be /sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra'
     print ''
     print 'Example:'
-    print '$ python %s 6 50 74-F0-6E-20-D4-74 155.210.157.237 2819 /sys/kernel/debug/ieee80211/phy0/ath9k/ > agent.click' %(sys.argv[0])
+    print '$ python %s 6 50 74-F0-6E-20-D4-74 155.210.157.237 2819 /sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra > agent.click' %(sys.argv[0])
     print ''
     print 'and then run the .click file you have generated'
     print 'click$ ./bin/click agent.click'
     sys.exit(0)
 
-AP_UNIQUE_IP = "192.168.1.100"				# IP address of the wlan0 interface of the router where Click runs (in monitor mode)
+AP_UNIQUE_IP = "192.168.1.100"				# IP address of the wlan0 interface of the router where Click runs (in monitor mode). It seems it does not matter.
 MASK = "24"
 seq = (AP_UNIQUE_IP,"/",MASK)
 #AP_UNIQUE_IP_WITH_MASK = ''.join(seq)		# join the AP_UNIQUE_IP and the mask
-AP_UNIQUE_BSSID = "74:F0:6E:20:D4:74"		# MAC address of the wlan0 interface of the router where Click runs (in monitor mode)
+AP_UNIQUE_BSSID = "74:F0:6E:20:D4:74"		# MAC address of the wlan0 interface of the router where Click runs (in monitor mode). It seems it does not matter.
 AP_CHANNEL = sys.argv[1]
 QUEUE_SIZE = sys.argv[2]
 HW_ADDR = sys.argv[3]		# not needed ??
 ODIN_MASTER_IP = sys.argv[4]
 ODIN_MASTER_PORT = sys.argv[5]
-DEBUG_PATH = sys.argv[6]
+DEBUGFS_FILE = sys.argv[6]
 
 DEFAULT_CLIENT_MAC = "74:F0:6D:20:DA:FF"	# invented and not used
 NETWORK_INTERFACE_NAMES = "mon"				# beginning of the network interface names in monitor mode. e.g. mon
@@ -66,8 +66,8 @@ print '''
 //
 
 // call OdinAgent::configure to create and configure an Odin agent:
-odinagent::OdinAgent(%s, RT rates, CHANNEL %s, DEFAULT_GW %s, DEBUGFS %s)
-''' % (HW_ADDR, AP_CHANNEL, DEFAULT_GW, DEBUG_PATH )
+odinagent::OdinAgent(HWADDR %s, RT rates, CHANNEL %s, DEFAULT_GW %s, DEBUGFS %s)
+''' % (HW_ADDR, AP_CHANNEL, DEFAULT_GW, DEBUGFS_FILE )
 
 print '''
 // send a ping to odinsocket every 2 seconds ??
