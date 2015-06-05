@@ -118,20 +118,23 @@ FromHost(%s, HEADROOM 50)
 				// 0806 is the ARP ethertype, http://en.wikipedia.org/wiki/EtherType
 				// 20 means the 20th byte of the eth frame, i.e. the 6th byte of the ARP packet: 
 				// "Operation". It specifies the operation the sender is performing: 1 for request, 2 for reply.
+  -> Print("[Click] ARP request from host to resolve STA's ARP")
   -> fh_arpr :: ARPResponder(%s %s) 	// looking for an STA's ARP: Resolve STA's ARP
-  -> ARPPrint("Resolving client's ARP by myself")
+  -> Print("[Click] Resolving client's ARP by myself")
   -> ToHost(%s)
 ''' % (TAP_INTERFACE_NAME, STA_IP, STA_MAC, TAP_INTERFACE_NAME)
 
 print '''
 // Anything from host that is not an ARP request goes to the input 1 of Odin Agent
 fhcl[1]
+  -> Print("[Click] Not-ARP request from host goes to Odin agent port 1")
   -> [1]odinagent
 '''
 
 print '''
 // Not looking for an STA's ARP? Then let it pass.
 fh_arpr[1]
+  -> Print("[Click] ARP request to another STA goes to Odin agent port 1")
   -> [1]odinagent
 '''
 
@@ -178,9 +181,11 @@ odinagent[1]
 				// 0806 is the ARP ethertype, http://en.wikipedia.org/wiki/EtherType
 				// 20 means the 20th byte of the eth frame, i.e. the 6th byte of the ARP packet: 
 				// "Operation". It specifies the operation the sender is performing: 1 for request
+  -> Print("[Click] ARP request from the STA")
   -> arp_resp::ARPResponder (%s %s) // ARP fast path for STA
 									// the STA is asking for the MAC address of the AP
 									// add the IP of the AP and the BSSID of the LVAP corresponding to this STA
+  -> Print("[Click] ARP fast path for STA the STA is asking for the MAC address of the AP")
   -> [1]odinagent
 ''' % ( AP_UNIQUE_IP, AP_UNIQUE_BSSID )
 # it seems that AP_UNIQUE_IP and AP_UNIQUE_BSSID do not matter
@@ -189,6 +194,7 @@ print '''
 // Non ARP packets. Re-write MAC address to
 // reflect datapath or learning switch will drop it
 arp_c[1]
+  -> Print("[Click] Non ARP packet in arp_c classifier")
   -> ToHost(%s)
 ''' % ( TAP_INTERFACE_NAME )
 
@@ -198,5 +204,6 @@ print '''
 // ARP Fast path fail. Re-write MAC address (without modification)
 // to reflect datapath or learning switch will drop it
 arp_resp[1]
+  -> Print("[Click] ARP Fast path fail")
   -> ToHost(%s)
 ''' % ( TAP_INTERFACE_NAME )
