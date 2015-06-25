@@ -66,7 +66,7 @@ $VSCTL set bridge $SW other-config:datapath-id=$DPID
 #Configure the switch to have an OpenFlow Controller.  This will contact the controller.
 $VSCTL set-controller $SW tcp:$CTLIP:6633
 # Turn off the fail-safe mode
-$VSCTL set-fail-mode br0 secure
+$VSCTL set-fail-mode $SW secure
 #
 #Set some parameters for sFlow traffic control (see sFlow in http://openvswitch.org/support/dist-docs/ovs-vsctl.8.txt)
 #$VSCTL --id=@sflow create sflow agent=eth1.1  target=\"$CTLIP:6343\" sampling=2 polling=20 -- -- set bridge $SW sflow=@sflow
