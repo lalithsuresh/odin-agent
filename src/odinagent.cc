@@ -25,6 +25,11 @@
 #include <clicknet/ether.h>
 #include <clicknet/llc.h>
 #include "odinagent.hh"
+#include <iostream>   // std::cout
+#include <string>     // std::string, std::to_string
+#include <sstream>
+#include <stdlib.h>
+#include <stdio.h>
 
 CLICK_DECLS
 
@@ -98,7 +103,13 @@ int
 OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
 {
   _interval_ms = 5000;
-  _channel = 6;
+  _channel = 1;
+  _new_channel = 1;
+  _csa = false; //
+  _csa_count_default = 49; // Wait (n+1) beacons before first channel switch announcement
+  _csa_count = _csa_count_default; 
+  _count_csa_beacon_default = 10; // Number of beacons before channel switch
+  _count_csa_beacon = _count_csa_beacon_default;
   if (Args(conf, this, errh)
   .read_mp("HWADDR", _hw_mac_addr)
   .read_m("RT", ElementCastArg("AvailableRates"), _rtable)
@@ -450,10 +461,190 @@ OdinAgent::recv_probe_request (Packet *p)
  * Send a beacon/probe-response. This code is
  * borrowed from the BeaconSource element
  * and is modified to retrieve the BSSID/SSID
- * from the sta_mapping_table
+ * from the sta_mapping_table.
+ * 
+ * Modified from the original in order to include a 
+ * CSA-Beacon (channel switch announcement)
+ * which is sent to a client but does not change the 
+ * agent channel.
+ * 
+ * @author Luis Sequeira <sequeira@unizar.es>
+ * 
  */
 void
 OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe) {
+	if ( _csa == true && !(probe) ) { // For channel switch announcement
+	  
+		//printf("Sending beacon for csa\n");// For testing only
+	  
+		/* send_beacon after channel switch */
+	  Vector<int> rates = _rtable->lookup(bssid);
+
+	  /* order elements by standard
+	   * needed by sloppy 802.11b driver implementations
+	   * to be able to connect to 802.11g APs */
+	  int max_len = sizeof (struct click_wifi) +
+	    8 +                  /* timestamp */
+	    2 +                  /* beacon interval */
+	    2 +                  /* cap_info */
+	    2 + my_ssid.length() + /* ssid */
+	    2 + WIFI_RATES_MAXSIZE +  /* rates */
+	    2 + 1 +              /* ds parms */
+	    2 + 4 +              /* tim */
+	    5 +			/* csa */
+	    /* 802.11g Information fields */
+	    2 + WIFI_RATES_MAXSIZE +  /* xrates */
+	    0;
+
+	  
+	  WritablePacket *p = Packet::make(max_len);
+
+	  if (p == 0)
+	    return;
+
+	  struct click_wifi *w = (struct click_wifi *) p->data();
+
+	  w->i_fc[0] = WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_MGT;
+	  if (probe) {
+	    w->i_fc[0] |= WIFI_FC0_SUBTYPE_PROBE_RESP;
+	  } else {
+	    w->i_fc[0] |=  WIFI_FC0_SUBTYPE_BEACON;
+	  }
+
+	  w->i_fc[1] = WIFI_FC1_DIR_NODS;
+
+	  memcpy(w->i_addr1, dst.data(), 6);
+	  memcpy(w->i_addr2, bssid.data(), 6);
+	  memcpy(w->i_addr3, bssid.data(), 6);
+
+	  w->i_dur = 0;
+	  w->i_seq = 0;
+
+	  uint8_t *ptr;
+
+	  ptr = (uint8_t *) p->data() + sizeof(struct click_wifi);
+	  int actual_length = sizeof (struct click_wifi);
+
+
+	  /* timestamp is set in the hal. ??? */
+	  memset(ptr, 0, 8);
+	  ptr += 8;
+	  actual_length += 8;
+
+	  uint16_t beacon_int = (uint16_t) _interval_ms;
+	  *(uint16_t *)ptr = cpu_to_le16(beacon_int);
+	  ptr += 2;
+	  actual_length += 2;
+
+	  uint16_t cap_info = 0;
+	  cap_info |= WIFI_CAPINFO_ESS;
+	  *(uint16_t *)ptr = cpu_to_le16(cap_info);
+	  ptr += 2;
+	  actual_length += 2;
+
+	  /* ssid */
+	  ptr[0] = WIFI_ELEMID_SSID;
+	  ptr[1] = my_ssid.length();
+	  memcpy(ptr + 2, my_ssid.data(), my_ssid.length());
+	  ptr += 2 + my_ssid.length();
+	  actual_length += 2 + my_ssid.length();
+
+	  /* rates */
+	  ptr[0] = WIFI_ELEMID_RATES;
+	  ptr[1] = WIFI_MIN(WIFI_RATE_SIZE, rates.size());
+	  for (int x = 0; x < WIFI_MIN(WIFI_RATE_SIZE, rates.size()); x++) {
+	    ptr[2 + x] = (uint8_t) rates[x];
+
+	    if (rates[x] == 2) {
+	      ptr [2 + x] |= WIFI_RATE_BASIC;
+	    }
+
+	  }
+	  ptr += 2 + WIFI_MIN(WIFI_RATE_SIZE, rates.size());
+	  actual_length += 2 + WIFI_MIN(WIFI_RATE_SIZE, rates.size());
+
+
+	  /* channel */
+	  ptr[0] = WIFI_ELEMID_DSPARMS;
+	  ptr[1] = 1;
+	  ptr[2] = (uint8_t) _channel; 
+	  ptr += 2 + 1;
+	  actual_length += 2 + 1;
+
+	  /* tim */
+
+	  ptr[0] = WIFI_ELEMID_TIM;
+	  ptr[1] = 4;
+
+	  ptr[2] = 0; 		//count
+	  ptr[3] = 1; 		//period
+	  ptr[4] = 0; 		//bitmap control
+	  ptr[5] = 0; 		//paritial virtual bitmap
+	  ptr += 2 + 4; 	// Channel Switch Count
+	  actual_length += 2 + 4;
+	  
+	  /* csa */
+	  
+	  ptr[0] = 37;	// Element ID 
+	  ptr[1] = 3; 	// Length
+	  ptr[2] = 0; 	// Channel Switch Mode
+	  ptr[3] = _new_channel; 	// New Channel Number
+	  ptr[4] = _count_csa_beacon--; // Countdown
+	  ptr += 5;
+	  actual_length += 5;
+
+	  /* 802.11g fields */
+	  /* extended supported rates */
+	  int num_xrates = rates.size() - WIFI_RATE_SIZE;
+	  if (num_xrates > 0) {
+	    /* rates */
+	    ptr[0] = WIFI_ELEMID_XRATES;
+	    ptr[1] = num_xrates;
+	    for (int x = 0; x < num_xrates; x++) {
+	      ptr[2 + x] = (uint8_t) rates[x + WIFI_RATE_SIZE];
+
+	      if (rates[x + WIFI_RATE_SIZE] == 2) {
+	        ptr [2 + x] |= WIFI_RATE_BASIC;
+	      }
+
+	    }
+	    ptr += 2 + num_xrates;
+	    actual_length += 2 + num_xrates;
+	  }
+
+	  p->take(max_len - actual_length);
+
+	  Timestamp now = Timestamp::now();
+	  Timestamp old =  _mean_table.get (dst);
+
+	  if (old != NULL) {
+
+	    Timestamp diff = now - old;
+	    double new_val = diff.sec() * 1000000000 + diff.usec();
+
+	    fprintf(stderr, "Out: %f\n", new_val);
+
+	    _num_mean++;
+	    double delta = new_val - _mean;
+	    _mean = _mean + delta/_num_mean;
+	    _m2 = _m2 + delta * (new_val - _mean);
+	    _mean_table.erase (dst);
+	  }
+
+	  output(0).push(p);
+	}
+
+	else { // For NO channel switch announcement or probe responder
+		
+  /* For testing only */
+  /*if ( probe ) {
+	  printf("Sending Probe Response\n");
+  }
+  else {
+    printf("Sending beacon for NO csa\n");
+  }*/
+		
+  /* send_beacon before channel switch or probe response */
   Vector<int> rates = _rtable->lookup(bssid);
 
   /* order elements by standard
@@ -597,6 +788,30 @@ OdinAgent::send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bo
   }
 
   output(0).push(p);
+}
+		
+
+  /** 
+   * Give some time before channel switch 
+   * Used for testing only
+   */
+  /*if ( _csa_count == 0 ) {
+	  _csa = true;
+	  printf("_csa is true\n");
+  }
+  else {
+	  _csa_count--;
+	  printf("Decreasing _csa_count = %d\n", _csa_count);
+  }*/
+  
+  /* Reset counters after channel switch */
+  if ( _count_csa_beacon < 0 ) {
+    	  _count_csa_beacon = _count_csa_beacon_default;
+	  //_csa_count = _csa_count_default;
+	  _csa = false;
+  }
+	
+
 }
 
 
@@ -1363,6 +1578,13 @@ OdinAgent::read_handler(Element *e, void *user_data)
   return sa.take_string();
 }
 
+/*
+ * We have include new handlers an modified others
+ * 
+ * @author Luis Sequeira <sequeira@unizar.es>
+ * 
+ * */
+
 int
 OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHandler *errh)
 {
@@ -1447,7 +1669,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
         }
       break;
     }
-    case handler_channel: {
+    case handler_channel: { // Modified, now it change the physical channel
       int channel;
       if (Args(agent, errh).push_back_words(str)
         .read_mp("CHANNEL", channel)
@@ -1457,6 +1679,14 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
         }
 
       agent->_channel = channel;
+      printf("########### Changing to channel::::::::::::::::::::::::::::::::::::" + channel);
+      std::stringstream ss;
+      ss << "iw dev mon0 set channel " << channel;
+      std::string str = ss.str();
+      char *cstr = new char[str.length() + 1];
+      strcpy(cstr, str.c_str());
+      system(cstr);
+      system("iw mon0 info");
       break;
     }
     case handler_interval: {
@@ -1622,6 +1852,43 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       agent->_signal_offset = value;
       break;
     }
+    case handler_channel_switch_announcement: { // New handler for CSA-Beacon
+      int new_channel;
+      EtherAddress sta_mac;
+      EtherAddress vap_bssid;
+      
+      printf("#################### Setting new channel and csa ::::::::::::::");      
+      
+      Args args = Args(agent, errh).push_back_words(str);
+      if (args.read_mp("STA_MAC", sta_mac)
+            .read_mp("VAP_BSSID", vap_bssid)
+	    .read_mp("CHANNEL", new_channel)
+            .consume() < 0)
+        {
+          return -1;
+        }
+
+      Vector<String> ssidList;
+      while (!args.empty()) {
+        String vap_ssid;
+        if (args.read_mp("VAP_SSID", vap_ssid)
+              .consume() < 0)
+          {
+            return -1;
+          }
+        ssidList.push_back(vap_ssid);
+      }
+      
+      agent->_new_channel = new_channel;//How to put the channel into new_channel?
+      agent->_csa = true;
+
+      for (Vector<String>::const_iterator it = ssidList.begin();
+            it != ssidList.end(); it++) {
+        agent->send_beacon (sta_mac, vap_bssid, *it, false);
+      }
+      
+      break;
+    }
   }
   return 0;
 }
@@ -1649,6 +1916,7 @@ OdinAgent::add_handlers()
   add_write_handler("testing_send_probe_request", write_handler, handler_probe_request);
   add_write_handler("handler_update_signal_strength", write_handler, handler_update_signal_strength);
   add_write_handler("signal_strength_offset", write_handler, handler_signal_strength_offset);
+  add_write_handler("channel_switch_announcement", write_handler, handler_channel_switch_announcement);
 }
 
 /* This debug function prints info about clients */
