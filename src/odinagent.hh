@@ -122,6 +122,7 @@ public:
     handler_report_mean, 
     handler_update_signal_strength,
     handler_signal_strength_offset,
+    handler_channel_switch_announcement,
   };
 
   // Rx-stats about stations
@@ -157,6 +158,12 @@ public:
 
   int _interval_ms; // Beacon interval: common between all VAPs for now
   int _channel; // Channel to be shared by all VAPs.
+  int _new_channel; // New channel for CSA
+  bool _csa; // For channel switch announcement
+  int _count_csa_beacon; // For channel switch announcement
+  int _count_csa_beacon_default; // Default number of beacons before channel switch
+  int _csa_count; // For _csa FALSE-->TRUE
+  int _csa_count_default;
   Vector<Subscription> _subscription_list;
   bool _debug;
   HashTable<EtherAddress, String> _packet_buffer;
