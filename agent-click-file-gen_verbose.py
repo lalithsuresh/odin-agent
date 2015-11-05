@@ -15,7 +15,7 @@ if (len(sys.argv) != 7):
     print ''
     print '%s <AP_CHANNEL> <QUEUE_SIZE> <HW_ADDR> <ODIN_MASTER_IP> <ODIN_MASTER_PORT> <DEBUGFS_FILE>' %(sys.argv[0])
     print ''
-    print 'AP_CHANNEL: it must be the same where mon0 of the AP is placed'
+    print 'AP_CHANNEL: it must be the same where mon0 of the AP is placed. To avoid problems at init time, it MUST be the same channel specified in the /etc/config/wireless file of the AP'
     print 'QUEUE_SIZE: you can use the size 50'
     print 'HW_ADDR: the MAC of the wireless interface mon0 of the AP. e.g. 74-F0-6E-20-D4-74'
     print 'ODIN_MASTER_IP is the IP of the openflow controller where Odin master is running'
@@ -30,7 +30,7 @@ if (len(sys.argv) != 7):
     print 'click$ ./bin/click agent.click'
     sys.exit(0)
 
-AP_UNIQUE_IP = "192.168.1.5"				# IP address of the wlan0 interface of the router where Click runs (in monitor mode). It seems it does not matter.
+AP_UNIQUE_IP = "192.168.1.5"			# IP address of the wlan0 interface of the router where Click runs (in monitor mode). It seems it does not matter.
 MASK = "24"
 seq = (AP_UNIQUE_IP,"/",MASK)
 #AP_UNIQUE_IP_WITH_MASK = ''.join(seq)		# join the AP_UNIQUE_IP and the mask
