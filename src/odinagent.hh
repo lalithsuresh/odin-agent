@@ -84,6 +84,7 @@ public:
   // Methods to handle and send
   // 802.11 management messages
   void recv_probe_request (Packet *p);
+  void recv_deauth (Packet *p);
   void send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe);
   void recv_assoc_request (Packet *p);
   void send_assoc_response (EtherAddress, uint16_t status, uint16_t associd);
@@ -100,9 +101,14 @@ public:
   int set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssid);
   int remove_vap (EtherAddress sta_mac);
 
+  //debug
+  void print_stations_state();
+
+
   // Read/Write handlers
   static String read_handler(Element *e, void *user_data);
   static int write_handler(const String &str, Element *e, void *user_data, ErrorHandler *errh);
+
 
   // Extend this enum table to add
   // new handlers.
@@ -118,8 +124,8 @@ public:
     handler_subscriptions,
     handler_debug,
     handler_probe_response,
-    handler_probe_request, 
-    handler_report_mean, 
+    handler_probe_request,
+    handler_report_mean,
     handler_update_signal_strength,
     handler_signal_strength_offset,
   };
@@ -169,7 +175,8 @@ private:
   class AvailableRates *_rtable;
   int _associd;
   Timer _beacon_timer;
-  Timer _cleanup_timer;
+  Timer _clean_stats_timer;
+  Timer _general_timer;
   IPAddress _default_gw_addr;
   String _debugfs_string;
 };
