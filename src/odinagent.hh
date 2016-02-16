@@ -84,6 +84,7 @@ public:
   // Methods to handle and send
   // 802.11 management messages
   void recv_probe_request (Packet *p);
+
   void recv_deauth (Packet *p);
   void send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe);
   void recv_assoc_request (Packet *p);
@@ -102,6 +103,7 @@ public:
   int remove_vap (EtherAddress sta_mac);
 
   //debug
+
   void print_stations_state();
 
 
@@ -128,6 +130,7 @@ public:
     handler_report_mean,
     handler_update_signal_strength,
     handler_signal_strength_offset,
+    handler_channel_switch_announcement,
   };
 
   // Rx-stats about stations
@@ -163,6 +166,12 @@ public:
 
   int _interval_ms; // Beacon interval: common between all VAPs for now
   int _channel; // Channel to be shared by all VAPs.
+  int _new_channel; // New channel for CSA
+  bool _csa; // For channel switch announcement
+  int _count_csa_beacon; // For channel switch announcement
+  int _count_csa_beacon_default; // Default number of beacons before channel switch
+  int _csa_count; // For _csa FALSE-->TRUE
+  int _csa_count_default;
   Vector<Subscription> _subscription_list;
   bool _debug;
   HashTable<EtherAddress, String> _packet_buffer;
@@ -175,8 +184,10 @@ private:
   class AvailableRates *_rtable;
   int _associd;
   Timer _beacon_timer;
+
   Timer _clean_stats_timer;
   Timer _general_timer;
+
   IPAddress _default_gw_addr;
   String _debugfs_string;
 };
