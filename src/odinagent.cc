@@ -329,8 +329,10 @@ OdinAgent::recv_deauth (Packet *p) {
 
         /*uint16_t algo = le16_to_cpu(*(uint16_t *) ptr);
         ptr += 2;
+
         uint16_t seq = le16_to_cpu(*(uint16_t *) ptr);
         ptr += 2;
+
         uint16_t status = le16_to_cpu(*(uint16_t *) ptr);
         ptr += 2;
 */
@@ -359,6 +361,7 @@ OdinAgent::recv_deauth (Packet *p) {
         StringAccum sa;
         sa << "deauthentication " << src.unparse_colon().c_str() << "\n";
 
+
         String payload = sa.take_string();
         WritablePacket *odin_disconnect_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
         output(3).push(odin_disconnect_packet);
@@ -369,6 +372,7 @@ OdinAgent::recv_deauth (Packet *p) {
 
         return;
 }
+
 
 
 /**
@@ -906,6 +910,99 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
 
         EtherAddress src = EtherAddress(w->i_addr2);
 
+
+/**
+* Receive an Open Auth request. This code is
+* borrowed from the OpenAuthResponder element
+* and is modified to retrieve the BSSID/SSID
+* from the sta_mapping_table
+*/
+void
+OdinAgent::recv_open_auth_request (Packet *p) {
+    //fprintf(stderr, "Inside recv_auth_request\n");
+
+    struct click_wifi *w = (struct click_wifi *) p->data();
+    uint8_t *ptr;
+    ptr = (uint8_t *) p->data() + sizeof(struct click_wifi);
+
+    uint16_t algo = le16_to_cpu(*(uint16_t *) ptr);
+    ptr += 2;
+
+    uint16_t seq = le16_to_cpu(*(uint16_t *) ptr);
+    ptr += 2;
+
+    uint16_t status = le16_to_cpu(*(uint16_t *) ptr);
+    ptr += 2;
+
+    EtherAddress src = EtherAddress(w->i_addr2);
+    EtherAddress dst = EtherAddress(w->i_addr1);
+
+    //If we're not aware of this LVAP, ignore
+    if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
+        p->kill();
+        return;
+    }
+
+    if (algo != WIFI_AUTH_ALG_OPEN) {
+        // click_chatter("%{element}: auth %d from %s not supported\n",
+        // this,
+        // algo,
+        // src.unparse().c_str());
+        p->kill();
+        return;
+    }
+
+    if (seq != 1) {
+        // click_chatter("%{element}: auth %d weird sequence number %d\n",
+        // this,
+        // algo,
+        // seq);
+        p->kill();
+        return;
+    }
+
+    fprintf(stderr, "(OpenAuth request)     STA (%s) ----> AP (%s)\n", src.unparse_colon().c_str(), dst.unparse_colon().c_str());
+    send_open_auth_response(src, 2, WIFI_STATUS_SUCCESS);
+
+    p->kill();
+    return;
+}
+
+
+/**
+* Send an Open Auth request. This code is
+* borrowed from the OpenAuthResponder element
+* and is modified to retrieve the BSSID/SSID
+* from the sta_mapping_table
+*/
+void
+OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t status) {
+
+    OdinStationState oss = _sta_mapping_table.get (dst);
+
+    int len = sizeof (struct click_wifi) +
+    2 +                  /* alg */
+    2 +                  /* seq */
+    2 +                  /* status */
+    0;
+
+    WritablePacket *p = Packet::make(len);
+
+    if (p == 0)
+        return;
+
+        struct click_wifi *w = (struct click_wifi *) p->data();
+
+        w->i_fc[0] = WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_MGT | WIFI_FC0_SUBTYPE_AUTH;
+        w->i_fc[1] = WIFI_FC1_DIR_NODS;
+
+        memcpy(w->i_addr1, dst.data(), 6);
+        memcpy(w->i_addr2, oss._vap_bssid.data(), 6);
+        memcpy(w->i_addr3, oss._vap_bssid.data(), 6);
+
+        EtherAddress src = EtherAddress(w->i_addr2);
+
+
         w->i_dur = 0;
         w->i_seq = 0;
 
@@ -1217,7 +1314,9 @@ OdinAgent::update_rx_stats(Packet *p)
   if(_debug){
         FILE * fp;
         fp = fopen ("/root/spring/shared/updated_stats.txt", "w");
-        fprintf(fp, "* update_rx_stats: src = %s, rate = %i, noise = %i, signal = %i (%i dBm)\n", src.unparse_colon().c_str(), stat._rate, stat._noise, stat._signal, (stat._signal - 256)); //(value - 256)
+
+        fprintf(fp, "* update_rx_stats: src = %s, rate = %i, noise = %i, signal = %i (%i dBm)\n", src.unparse_colon().c_str(), stat._rate, stat._noise, stat._signal, (stat._signal - 128)*-1); //-(value - 128)
+
         fclose(fp);
   }
 */
@@ -1933,6 +2032,7 @@ OdinAgent::print_stations_state()
         for (HashTable<EtherAddress, OdinStationState>::iterator it
             = _sta_mapping_table.begin(); it.live(); it++){
 
+
                 for (int i = 0; i < it.value()._vap_ssids.size (); i++) {
                     fprintf(stderr,"        Station -> BSSID: %s\n", (it.value()._vap_bssid).unparse_colon().c_str());
                     fprintf(stderr,"                -> IP addr: %s\n", it.value()._sta_ip_addr_v4.unparse().c_str());
@@ -1958,6 +2058,7 @@ OdinAgent::print_stations_state()
     }
 
 }
+
 
 /* This function erases the rx_stats of old clients */
 void
@@ -1991,7 +2092,9 @@ cleanup_lvap (Timer *timer, void *data)
         }
     }
 
-    // fprintf(stderr,"\nCleaning old info from:\n");
+
+    fprintf(stderr,"\nCleaning old info from:\n");
+
 
     for (Vector<EtherAddress>::const_iterator iter = buf.begin(); iter != buf.end(); iter++){
 
@@ -1999,7 +2102,9 @@ cleanup_lvap (Timer *timer, void *data)
         if(agent->_sta_mapping_table.find(*iter) != agent->_sta_mapping_table.end())
             continue;
 
-        // fprintf(stderr, "   station with MAC addr: %s\n", iter->unparse_colon().c_str());
+
+        fprintf(stderr, "   station with MAC addr: %s\n", iter->unparse_colon().c_str());
+
         agent->_rx_stats.erase (*iter);
     }
 
