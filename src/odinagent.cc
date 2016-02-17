@@ -909,7 +909,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
         memcpy(w->i_addr3, oss._vap_bssid.data(), 6);
 
         EtherAddress src = EtherAddress(w->i_addr2);
-
+}
 
 /**
 * Receive an Open Auth request. This code is
