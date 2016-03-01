@@ -84,7 +84,6 @@ public:
   // Methods to handle and send
   // 802.11 management messages
   void recv_probe_request (Packet *p);
-
   void recv_deauth (Packet *p);
   void send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe);
   void recv_assoc_request (Packet *p);
@@ -103,7 +102,6 @@ public:
   int remove_vap (EtherAddress sta_mac);
 
   //debug
-
   void print_stations_state();
 
 
@@ -184,10 +182,8 @@ private:
   class AvailableRates *_rtable;
   int _associd;
   Timer _beacon_timer;
-
   Timer _clean_stats_timer;
   Timer _general_timer;
-
   IPAddress _default_gw_addr;
   String _debugfs_string;
 };

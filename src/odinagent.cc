@@ -25,8 +25,8 @@
 #include <clicknet/ether.h>
 #include <clicknet/llc.h>
 #include "odinagent.hh"
-#include <iostream>   // std::cout
-#include <string>     // std::string, std::to_string
+#include <iostream>
+#include <string>
 #include <sstream>
 #include <stdlib.h>
 #include <stdio.h>
@@ -103,7 +103,7 @@ int
 OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
 {
   _interval_ms = 5000;
-  _channel = 1;
+  _channel = 6;
   _new_channel = 1;
   _csa = false; //
   _csa_count_default = 49; // Wait (n+1) beacons before first channel switch announcement
@@ -361,7 +361,6 @@ OdinAgent::recv_deauth (Packet *p) {
         StringAccum sa;
         sa << "deauthentication " << src.unparse_colon().c_str() << "\n";
 
-
         String payload = sa.take_string();
         WritablePacket *odin_disconnect_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
         output(3).push(odin_disconnect_packet);
@@ -372,7 +371,6 @@ OdinAgent::recv_deauth (Packet *p) {
 
         return;
 }
-
 
 
 /**
@@ -461,7 +459,7 @@ OdinAgent::recv_probe_request (Packet *p)
 }
 
 
-/**
+/** 
  * Send a beacon/probe-response. This code is
  * borrowed from the BeaconSource element
  * and is modified to retrieve the BSSID/SSID
@@ -910,7 +908,6 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
 
         EtherAddress src = EtherAddress(w->i_addr2);
 
-
         w->i_dur = 0;
         w->i_seq = 0;
 
@@ -1222,9 +1219,7 @@ OdinAgent::update_rx_stats(Packet *p)
   if(_debug){
         FILE * fp;
         fp = fopen ("/root/spring/shared/updated_stats.txt", "w");
-
         fprintf(fp, "* update_rx_stats: src = %s, rate = %i, noise = %i, signal = %i (%i dBm)\n", src.unparse_colon().c_str(), stat._rate, stat._noise, stat._signal, (stat._signal - 128)*-1); //-(value - 128)
-
         fclose(fp);
   }
 */
@@ -1338,15 +1333,9 @@ OdinAgent::push(int port, Packet *p)
         // FIXME: Inform controller accordingly? We'll need this
         // for roaming.
 
-// JMS LVAP not found in the table
-//fprintf(stderr, "*********** data packet does NOT correspond with any LVAP. Source MAC: %s\n", src.unparse_colon().c_str());
-
         p->kill ();
         return;
       }
-
-// JMS LVAP found in the table
-//fprintf(stderr, "*********** data packet does correspond with any LVAP. Source MAC: %s\n", src.unparse_colon().c_str());
 
       // There should be a WifiDecap element upstream.
       output(1).push(p);
@@ -1895,7 +1884,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
       }
       
       break;
-    }
+    }   
   }
   return 0;
 }
@@ -1940,10 +1929,9 @@ OdinAgent::print_stations_state()
         for (HashTable<EtherAddress, OdinStationState>::iterator it
             = _sta_mapping_table.begin(); it.live(); it++){
 
-
                 for (int i = 0; i < it.value()._vap_ssids.size (); i++) {
                     fprintf(stderr,"        Station -> BSSID: %s\n", (it.value()._vap_bssid).unparse_colon().c_str());
-                    fprintf(stderr,"                -> IP addr: %s\n", it.value()._sta_ip_addr_v4.unparse().c_str());
+                    //fprintf(stderr,"                -> IP addr: %s\n", it.value()._sta_ip_addr_v4.unparse().c_str());
                 }
         }
 
@@ -1955,18 +1943,15 @@ OdinAgent::print_stations_state()
             if(_sta_mapping_table.find(iter.key()) != _sta_mapping_table.end()){
                 fprintf(stderr,"                -> rate: %i\n", (iter.value()._rate));
                 fprintf(stderr,"                -> noise: %i\n", (iter.value()._noise));
-		// fixed by jsaldana: dbm =  signal - 256
-                fprintf(stderr,"                -> signal: %i (%i dBm)\n", (iter.value()._signal), ((iter.value()._signal) - 256));
+                fprintf(stderr,"                -> signal: %i (-%i dBm)\n", (iter.value()._signal), (iter.value()._signal) - 128);
                 fprintf(stderr,"                -> packets: %i\n", (iter.value()._packets));
                 fprintf(stderr,"                -> last heard: %d.%06d \n", (iter.value()._last_received).sec(), (iter.value()._last_received).subsec());
-		fprintf(stderr,"\n");
             }
         }
 
     }
 
 }
-
 
 /* This function erases the rx_stats of old clients */
 void
@@ -2000,9 +1985,7 @@ cleanup_lvap (Timer *timer, void *data)
         }
     }
 
-
     fprintf(stderr,"\nCleaning old info from:\n");
-
 
     for (Vector<EtherAddress>::const_iterator iter = buf.begin(); iter != buf.end(); iter++){
 
@@ -2010,9 +1993,7 @@ cleanup_lvap (Timer *timer, void *data)
         if(agent->_sta_mapping_table.find(*iter) != agent->_sta_mapping_table.end())
             continue;
 
-
         fprintf(stderr, "   station with MAC addr: %s\n", iter->unparse_colon().c_str());
-
         agent->_rx_stats.erase (*iter);
     }
 
