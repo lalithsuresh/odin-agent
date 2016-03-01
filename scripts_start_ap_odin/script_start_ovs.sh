@@ -12,13 +12,16 @@ DPID=0000000000000212
  
 # This is the name of the bridge that we're going to be creating
 SW=br0
- 
+
+# This is the TCP port number for the openvswitch database
+TCP_PORT_OVS=6632
+
 #What ports are we going to put in the OVS?
 #DPPORTS="eth0.1 eth0.2 eth0.3 eth0.4 wlan0 wlan0-2 wlan0-3"
 DPPORTS="eth1.1"
 
 #Alias some variables
-VSCTL="ovs-vsctl --db=tcp:$MYIP:9999"
+VSCTL="ovs-vsctl --db=tcp:$MYIP:$TCP_PORT_OVS"
 OVSDB=/tmp/ovs-vswitchd.conf.db
  
 # Subroutine to wait until a port is ready
@@ -43,12 +46,12 @@ rm -f $OVSDB
 ovsdb-tool create $OVSDB /usr/share/openvswitch/vswitch.ovsschema
  
 # Start the OVSDB server and wait until it starts
-ovsdb-server $OVSDB --remote=ptcp:9999:$MYIP &
-#wait_port_listen 9999
+ovsdb-server $OVSDB --remote=ptcp:$TCP_PORT_OVS:$MYIP &
+#wait_port_listen $TCP_PORT_OVS
 sleep 5
  
 # Start vSwitchd
-ovs-vswitchd tcp:$MYIP:9999 --pidfile=ovs-vswitchd.pid --overwrite-pidfile -- &
+ovs-vswitchd tcp:$MYIP:$TCP_PORT_OVS --pidfile=ovs-vswitchd.pid --overwrite-pidfile -- &
  
 # Create the bridge and pass in some configuration options
 $VSCTL add-br $SW
