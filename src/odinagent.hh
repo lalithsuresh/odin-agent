@@ -79,6 +79,7 @@ public:
         String statistic;
         relation_t rel;
         double val;
+		Timestamp last_publish_sent; // Stores the timestamp when the last publish has been sent for a single subscription
   };
 
   // Methods to handle and send
@@ -150,6 +151,7 @@ public:
   // a per client basis
   HashTable<EtherAddress, OdinStationState> _sta_mapping_table;
   HashTable<EtherAddress, Timestamp> _mean_table;
+  HashTable<EtherAddress, Timestamp> _station_subs_table; // Table storing the last time when a publish for an ETH address has been sent
 
   // For stat collection
   double _mean;
@@ -186,6 +188,7 @@ private:
   Timer _general_timer;
   IPAddress _default_gw_addr;
   String _debugfs_string;
+  String _ssid_agent_string;	// stores the SSID of the agent
 };
 
 

@@ -37,11 +37,11 @@ CLICK_DECLS
 void misc_thread(Timer *timer, void *);
 void cleanup_lvap(Timer *timer, void *);
 
-int THRESHOLD_OLD_STATS = 30; //timer interval after which the stats of old clients will be removed (seconds)
-int RESCHEDULE_INTERVAL_GENERAL = 35; //time interval after which general_timer will be rescheduled (seconds)
-int RESCHEDULE_INTERVAL_STATS = 60; //time interval after which general_timer will be rescheduled (seconds)
-int THRESHOLD_REMOVE_LVAP = 80; //time interval after which an lvap will be removed if we didn't hear from the client (seconds)
-
+int THRESHOLD_OLD_STATS = 30; //timer interval [sec] after which the stats of old clients will be removed
+int RESCHEDULE_INTERVAL_GENERAL = 35; //time interval [sec] after which general_timer will be rescheduled
+int RESCHEDULE_INTERVAL_STATS = 60; //time interval [sec] after which general_timer will be rescheduled
+int THRESHOLD_REMOVE_LVAP = 80; //time interval [sec] after which an lvap will be removed if we didn't hear from the client
+int THRESHOLD_PUBLISH_SENT = 5; //time interval [sec] after which a publish message can be sent again
 
 OdinAgent::OdinAgent()
 : _mean(0),
@@ -52,7 +52,8 @@ OdinAgent::OdinAgent()
   _rtable(0),
   _associd(0),
   _beacon_timer(this),
-  _debugfs_string("")
+  _debugfs_string(""),
+  _ssid_agent_string("")
 {
   _clean_stats_timer.assign(&cleanup_lvap, (void *) this);
   _general_timer.assign (&misc_thread, (void *) this);
@@ -116,6 +117,7 @@ OdinAgent::configure(Vector<String> &conf, ErrorHandler *errh)
   .read_m("CHANNEL", _channel)
   .read_m("DEFAULT_GW", _default_gw_addr)
   .read_m("DEBUGFS", _debugfs_string)
+  .read_m("SSIDAGENT", _ssid_agent_string)
   .complete() < 0)
   return -1;
 
@@ -185,7 +187,11 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   }
 
   if (_debug) {
-      fprintf(stderr, "add_lvap %s\n", sta_mac.unparse_colon().c_str());
+      //fprintf(stderr, "[Odinagent.cc] add_lvap %s\n", sta_mac.unparse_colon().c_str());
+      fprintf(stderr, "[Odinagent.cc] add_lvap (%s, %s, %s, %s)\n", sta_mac.unparse_colon().c_str()
+                                                , sta_ip.unparse().c_str()
+                                                , sta_bssid.unparse().c_str()
+                                                , vap_ssids[0].c_str());
   }
 
   OdinStationState state;
@@ -195,9 +201,18 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   _sta_mapping_table.set(sta_mac, state);
 
   // We need to prime the ARP responders
-  // FIXME: Don't rely on labelled name
   Router *r = router();
-  HandlerCall::call_write (r->find("fh_arpr"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+
+  //FIXME: add if (_debug==2)
+  //if ( r->find("fh_arpr" ) == NULL ) fprintf(stderr, "[Odinagent.cc] addLVAP: fh_arpr element not found\n");
+  // ARP response to the ARP requests from device (coming from the wired network)
+  int result = HandlerCall::call_write (r->find("fh_arpr"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+  //fprintf(stderr,"[Odinagent.cc] addLVAP: result of the fh_arpr call write: %i\n", result);
+
+  //if ( r->find("arp_resp" ) == NULL ) fprintf(stderr, "[Odinagent.cc] addLVAP: arp_resp element not found\n");
+  // ARP response to the ARP requests from the wireless network
+  result = HandlerCall::call_write (r->find("arp_resp"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+  //fprintf(stderr,"[Odinagent.cc] addLVAP: result of the arp_resp call write: %i\n", result);
 
   compute_bssid_mask();
 
@@ -267,9 +282,18 @@ OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
   _sta_mapping_table.set(sta_mac, state);
 
   // We need to update the ARP responder
-  // FIXME: Don't rely on labelled name
   Router *r = router();
-  HandlerCall::call_write (r->find("fh_arpr"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+
+  //FIXME: add if (_debug==2)
+  //if ( r->find("fh_arpr" ) == NULL ) fprintf(stderr, "[Odinagent.cc] setLVAP: fh_arpr element not found\n");
+  // ARP response to the ARP requests from device (coming from the wired network)
+  int result = HandlerCall::call_write (r->find("fh_arpr"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+  //fprintf(stderr,"[Odinagent.cc] setLVAP: result of the fh_arpr call write: %i\n", result);
+
+  //if ( r->find("arp_resp" ) == NULL ) fprintf(stderr, "[Odinagent.cc] setLVAP: arp_resp element not found\n");
+  // ARP response to the ARP requests from the wireless network
+  result = HandlerCall::call_write (r->find("arp_resp"), "add", state._sta_ip_addr_v4.unparse() + " " + sta_mac.unparse_colon());
+  //fprintf(stderr,"[Odinagent.cc] setLVAP: result of the arp_resp call write: %i\n", result);
 
   compute_bssid_mask();
 
@@ -300,6 +324,7 @@ OdinAgent::remove_vap (EtherAddress sta_mac)
   // FIXME: Don't rely on labelled name
   Router *r = router();
   HandlerCall::call_write (r->find("fh_arpr"), "remove", it.value()._sta_ip_addr_v4.unparse() + "/32");
+  HandlerCall::call_write (r->find("arp_resp"), "remove", it.value()._sta_ip_addr_v4.unparse() + "/32");
 
   _sta_mapping_table.erase (it);
 
@@ -416,16 +441,21 @@ OdinAgent::recv_probe_request (Packet *p)
 
   EtherAddress src = EtherAddress(w->i_addr2);
 
+  // FIXME: Debug=3
+  //if (_debug) fprintf(stderr, "[Odinagent.cc] SSID frame: %s SSID AP: %s\n", ssid.c_str(), _ssid_agent_string.c_str());
+
   //If we're not aware of this LVAP, then send to the controller.
   if (_sta_mapping_table.find(src) == _sta_mapping_table.end()) {
-    StringAccum sa;
-    sa << "probe " << src.unparse_colon().c_str() << " " << ssid << "\n";
-    String payload = sa.take_string();
-    WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
-    output(3).push(odin_probe_packet);
-    if(_debug)
-        //    fprintf(stderr, "Received probe request: not aware of this LVAP -> probe req sent to the controller\n");
-    _packet_buffer.set (src, ssid);
+	  if ((ssid == "") || (ssid == _ssid_agent_string)) {  //if the ssid is blank (broadcast probe) or it is targetted to our SSID, forward it to the controller
+	  //if(_debug) fprintf(stderr, "[Odinagent.cc] Received probe request: not aware of this LVAP -> probe req sent to the controller\n");
+		StringAccum sa;
+		sa << "probe " << src.unparse_colon().c_str() << " " << ssid << "\n";
+		String payload = sa.take_string();
+		WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
+		output(3).push(odin_probe_packet);
+		_packet_buffer.set (src, ssid);
+	  }
+
     p->kill();
     return;
   }
@@ -937,7 +967,7 @@ OdinAgent::send_open_auth_response (EtherAddress dst, uint16_t seq, uint16_t sta
  */
 void
 OdinAgent::recv_assoc_request (Packet *p) {
-  //fprintf(stderr, "Inside recv_assoc_request\n");
+  //if (_debug) fprintf(stderr, "[Odinagent.cc] Inside recv_assoc_request\n");
 
   struct click_wifi *w = (struct click_wifi *) p->data();
 
@@ -1355,25 +1385,24 @@ OdinAgent::push(int port, Packet *p)
     if (_sta_mapping_table.find (eth) != _sta_mapping_table.end ())
     {
       OdinStationState oss = _sta_mapping_table.get (eth);
-
-      // If the client tried to make an ARP request for
+	  // If the client tried to make an ARP request for
       // its default gateway, and there is a response coming from
       // upstream, we have to correct the resolved hw-addr with the
       // VAP-BSSID to which the client corresponds.
       // This assumes there is an ARP responder element upstream
       // that can handle the _default_gw_addr
-      if (ntohs(e->ether_type) == ETHERTYPE_ARP) {
-        click_ether_arp *ea = (click_ether_arp *) (e + 1);
-        if (ntohs(ea->ea_hdr.ar_hrd) == ARPHRD_ETHER
-            && ntohs(ea->ea_hdr.ar_pro) == ETHERTYPE_IP
-            && ntohs(ea->ea_hdr.ar_op) == ARPOP_REPLY) {
+      //if (ntohs(e->ether_type) == ETHERTYPE_ARP) {
+      //  click_ether_arp *ea = (click_ether_arp *) (e + 1);
+      //  if (ntohs(ea->ea_hdr.ar_hrd) == ARPHRD_ETHER
+      //      && ntohs(ea->ea_hdr.ar_pro) == ETHERTYPE_IP
+      //      && ntohs(ea->ea_hdr.ar_op) == ARPOP_REPLY) {
 
-          IPAddress ipa = IPAddress(ea->arp_spa);
-          if (ipa == _default_gw_addr)
-            memcpy(ea->arp_sha, oss._vap_bssid.data(), 6);
-        }
-      }
-      Packet *p_out = wifi_encap (p, oss._vap_bssid);
+      //    IPAddress ipa = IPAddress(ea->arp_spa);
+      //    if (ipa == _default_gw_addr)
+      //      memcpy(ea->arp_sha, oss._vap_bssid.data(), 6);
+      //  }
+      //}
+	  Packet *p_out = wifi_encap (p, oss._vap_bssid);
       output(2).push(p_out);
       return;
     }
@@ -1392,6 +1421,7 @@ OdinAgent::add_subscription (long subscription_id, EtherAddress addr, String sta
   sub.statistic = statistic;
   sub.rel = r;
   sub.val = val;
+  sub.last_publish_sent= Timestamp::now(); //this stores the last timestamp when a Publish was sent
   _subscription_list.push_back (sub);
 
   fprintf(stderr, "Subscription added\n");
@@ -1402,6 +1432,8 @@ void
 OdinAgent::clear_subscriptions ()
 {
   _subscription_list.clear();
+  if (!_station_subs_table.empty())
+	  _station_subs_table.clear();	//clear time table
   fprintf(stderr, "Subscriptions cleared\n");
 
 }
@@ -1412,14 +1444,30 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
   if(_subscription_list.size() == 0)
     return;
 
+   // if the MAC is not in the mapping table, end the function
+  if (_sta_mapping_table.find (src) == _sta_mapping_table.end()) 
+         return;
+
+  fprintf(stderr,"[Odinagent.cc]  MAC %s is in the mapping table\n",src.unparse_colon().c_str());
+
+  Timestamp now = Timestamp::now();
+  Timestamp age;
   int count = 0;
+  int i = 0; 
+  int matched = 0;
+  
+  StringAccum subscription_matches_prev;
   StringAccum subscription_matches;
 
   for (Vector<OdinAgent::Subscription>::const_iterator iter = _subscription_list.begin();
            iter != _subscription_list.end(); iter++) {
 
     Subscription sub = *iter;
+	i++;
+	subscription_matches_prev.clear();
 
+	// EtherAddress builds a 00:00:00:00:00:00 MAC address (this is for dealing with '*' subscriptions)
+	// First I check if the address of the arrived packet matches
     if (sub.sta_addr != EtherAddress() && sub.sta_addr != src)
       continue;
 
@@ -1427,62 +1475,104 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
     switch (sub.rel) {
       case EQUALS: {
         if (sub.statistic == "signal" && stats._signal == sub.val) {
-          subscription_matches << " " << sub.subscription_id << ":" << stats._signal;
-          count++;
+          subscription_matches_prev << " " << sub.subscription_id << ":" << stats._signal; 
+		  matched = 1;
         } else if (sub.statistic == "rate" && stats._rate == sub.val) {
-          subscription_matches << " " <<  sub.subscription_id << ":" << stats._rate;
-          count++;
+          subscription_matches_prev << " " <<  sub.subscription_id << ":" << stats._rate;
+		  matched = 1;
         } else if (sub.statistic == "noise" && stats._noise == sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._noise;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._noise;
+		  matched = 1;
         } else if (sub.statistic == "_packets" && stats._packets == sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._packets;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._packets;
+		  matched = 1;
         }
         break;
       }
       case GREATER_THAN: {
        if (sub.statistic == "signal" && stats._signal > sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._signal;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._signal;
+		  matched = 1;
         } else if (sub.statistic == "rate" && stats._rate > sub.val) {
           subscription_matches <<  " " << sub.subscription_id << ":" << stats._rate;
-          count++;
+		  matched = 1;
         } else if (sub.statistic == "noise" && stats._noise > sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._noise;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._noise;
+		  matched = 1;
         } else if (sub.statistic == "_packets" && stats._packets > sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._packets;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._packets;
+		  matched = 1;
         }
         break;
       }
       case LESSER_THAN: {
         if (sub.statistic == "signal" && stats._signal < sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._signal;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._signal;
+		  matched = 1;
         } else if (sub.statistic == "rate" && stats._rate < sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._rate;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._rate;
+		  matched = 1;
         } else if (sub.statistic == "noise" && stats._noise < sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._noise;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._noise;
+		  matched = 1;
         } else if (sub.statistic == "_packets" && stats._packets < sub.val) {
-          subscription_matches <<  " " << sub.subscription_id << ":" << stats._packets;
-          count++;
+          subscription_matches_prev <<  " " << sub.subscription_id << ":" << stats._packets;
+		  matched = 1;
         }
         break;
       }
     }
+	// debuglevel 2 in all subsequent debugs
+	if (_debug) fprintf(stderr,"[Odinagent.cc]  MAC %s in subscription list\n",sub.sta_addr.unparse_colon().c_str());
+	if (matched) {
+			if (sub.sta_addr != EtherAddress()) {
+			// It is a specific subscription for a single MAC (not '*')
+    			// Calculate the time since the last publish was sent
+				if (_debug) fprintf(stderr,"[Odinagent.cc]  It is a specific subscription for a single MAC (%s)\n",sub.sta_addr.unparse_colon().c_str());
+				age = now - sub.last_publish_sent;
+				if (_debug) fprintf(stderr,"[Odinagent.cc]  Age: %s   Now: %s   last_publish_sent: %s\n",age.unparse().c_str(),now.unparse().c_str(), sub.last_publish_sent.unparse().c_str());
+				if (age.sec() < THRESHOLD_PUBLISH_SENT)
+					continue; // do not send the publish
+				_subscription_list.at(i-1).last_publish_sent = now; // update the timestamp
+				++count;
+				subscription_matches << subscription_matches_prev.take_string();
+				if (_debug) fprintf(stderr,"[Odinagent.cc]  Update timestamp for subscription:  src: %s   timestamp: %s\n",sub.sta_addr.unparse_colon().c_str(), _subscription_list.at(i-1).last_publish_sent.unparse().c_str());
+			}
+
+			else { 
+			// it is a '*' subscription:
+				// check the table with pairs of 'src' and timestamps
+				  if (_debug) fprintf(stderr,"[Odinagent.cc]  It is a '*' subscription MAC (%s)\n",EtherAddress().unparse_colon().c_str());
+				  if(_station_subs_table.find(src) != _station_subs_table.end()){
+						// the src is already in the table
+						 age = now - _station_subs_table.get (src);
+						 if (_debug) fprintf(stderr,"[Odinagent.cc]  Age: %s   Now: %s   last_publish_sent: %s\n",age.unparse().c_str(),now.unparse().c_str(), _station_subs_table.get(src).unparse().c_str());
+						 if (age.sec() < THRESHOLD_PUBLISH_SENT)
+								 continue;
+				   }
+				   // I add a new register in the table or/and update it if exists
+				   _station_subs_table.set (src, now);
+				   ++count;
+				   subscription_matches << subscription_matches_prev.take_string();
+				   if (_debug) fprintf(stderr,"[Odinagent.cc]  Add/Update register _station_subs_table  src: %s   timestamp: %s\n", src.unparse_colon().c_str(), _station_subs_table.get(src).unparse().c_str());
+				 } 
+		  matched = 0;
+
+	}
+  }
+  if (count > 0) { // if there are no matches, do not send anything to the controller
+
+	StringAccum sa;
+	
+	sa << "publish " << src.unparse_colon().c_str() << " " << count << subscription_matches.take_string() << "\n";
+	
+	String payload = sa.take_string();
+	if (_debug) fprintf(stderr,"[Odinagent.cc]  Publish sent %s\n",payload.c_str());
+	WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
+	output(3).push(odin_probe_packet);
   }
 
 
-  StringAccum sa;
-  sa << "publish " << src.unparse_colon().c_str() << " " << count << subscription_matches.take_string() << "\n";
-
-  String payload = sa.take_string();
-  WritablePacket *odin_probe_packet = Packet::make(Packet::default_headroom, payload.data(), payload.length(), 0);
-  output(3).push(odin_probe_packet);
 }
 
 String
@@ -1710,7 +1800,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           return -1;
         }
 
-      //fprintf(stderr, "num_rows: %d\n", num_rows);
+      //if (_debug) fprintf(stderr, "[Odinagent.cc] num_rows: %d\n", num_rows);
 
       for (int i = 0; i < num_rows; i++) {
         long sub_id;
@@ -1730,7 +1820,7 @@ OdinAgent::write_handler(const String &str, Element *e, void *user_data, ErrorHa
           }
 
         agent->add_subscription (sub_id, sta_addr, statistic, static_cast<relation_t>(relation), value);
-        //fprintf(stderr, "Subscription: %ld %s %s %i %f\n", sub_id, sta_addr.unparse_colon().c_str(), statistic.c_str(), relation, value);
+       //if (_debug) fprintf(stderr, "[Odinagent.cc] Subscription: %ld %s %s %i %f\n", sub_id, sta_addr.unparse_colon().c_str(), statistic.c_str(), relation, value);
 
       }
 
@@ -1943,8 +2033,8 @@ OdinAgent::print_stations_state()
             if(_sta_mapping_table.find(iter.key()) != _sta_mapping_table.end()){
                 fprintf(stderr,"                -> rate: %i\n", (iter.value()._rate));
                 fprintf(stderr,"                -> noise: %i\n", (iter.value()._noise));
-                fprintf(stderr,"                -> signal: %i (-%i dBm)\n", (iter.value()._signal), (iter.value()._signal) - 128);
-                fprintf(stderr,"                -> packets: %i\n", (iter.value()._packets));
+				fprintf(stderr,"                -> signal: %i (%i dBm)\n", iter.value()._signal, iter.value()._signal - 256 ); // value - 256)
+				fprintf(stderr,"                -> packets: %i\n", (iter.value()._packets));
                 fprintf(stderr,"                -> last heard: %d.%06d \n", (iter.value()._last_received).sec(), (iter.value()._last_received).subsec());
             }
         }
@@ -1985,7 +2075,7 @@ cleanup_lvap (Timer *timer, void *data)
         }
     }
 
-    fprintf(stderr,"\nCleaning old info from:\n");
+    //if (_debug) fprintf(stderr,"\n[Odinagent.cc] Cleaning old info from:\n");
 
     for (Vector<EtherAddress>::const_iterator iter = buf.begin(); iter != buf.end(); iter++){
 
@@ -1999,8 +2089,6 @@ cleanup_lvap (Timer *timer, void *data)
 
     agent->_packet_buffer.clear();
     timer->reschedule_after_sec(RESCHEDULE_INTERVAL_STATS);
-
-
 }
 
 /* Thread for general purpose (i.e. print debug info about them)*/
