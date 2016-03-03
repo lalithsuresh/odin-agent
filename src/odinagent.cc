@@ -192,10 +192,15 @@ OdinAgent::add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bss
 
  if (_debug_level % 10 > 0) {
       //fprintf(stderr, "[Odinagent.cc] add_lvap %s\n", sta_mac.unparse_colon().c_str());
+			if (_debug_level / 10 == 1)
+				fprintf(stderr, "##################################################################\n");
+
       fprintf(stderr, "[Odinagent.cc] add_lvap (%s, %s, %s, %s)\n", sta_mac.unparse_colon().c_str()
                                                 , sta_ip.unparse().c_str()
                                                 , sta_bssid.unparse().c_str()
                                                 , vap_ssids[0].c_str());
+			if (_debug_level / 10 == 1)
+				fprintf(stderr, "##################################################################\n\n");
   }
 
   OdinStationState state;
@@ -273,10 +278,14 @@ int
 OdinAgent::set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssids)
 {
   if (_debug_level % 10 > 0) {
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n");
     fprintf(stderr, "[Odinagent.cc] set_lvap (%s, %s, %s, %s)\n", sta_mac.unparse_colon().c_str()
                                                 , sta_ip.unparse().c_str()
                                                 , sta_bssid.unparse().c_str()
                                                 , vap_ssids[0].c_str());
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n\n");
   }
 
   // First make sure that this VAP isn't here already, in which
@@ -332,7 +341,13 @@ int
 OdinAgent::remove_vap (EtherAddress sta_mac)
 {
   if (_debug_level % 10 > 0) {
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n");
+
     fprintf(stderr, "[Odinagent.cc] remove_lvap (%s)\n", sta_mac.unparse_colon().c_str());
+
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n\n");
   }
 
   HashTable<EtherAddress, OdinStationState>::iterator it = _sta_mapping_table.find (sta_mac);
@@ -927,8 +942,12 @@ OdinAgent::recv_open_auth_request (Packet *p) {
         return;
     }
 
-	  if (_debug_level % 10 > 0)
+	  if (_debug_level % 10 > 0) {
+			if (_debug_level / 10 == 1)
+				fprintf(stderr, "##################################################################\n");
+
 	    fprintf(stderr, "[Odinagent.cc] OpenAuth request     STA (%s) ----> AP (%s)\n", src.unparse_colon().c_str(), dst.unparse_colon().c_str());
+		}
     send_open_auth_response(src, 2, WIFI_STATUS_SUCCESS);
 
     p->kill();
@@ -1181,9 +1200,14 @@ OdinAgent::send_assoc_response (EtherAddress dst, uint16_t status, uint16_t asso
   p->take(max_len - actual_length);
 
   output(0).push(p);
-	if (_debug_level % 10 > 0)
+
+	if (_debug_level % 10 > 0) {
 		fprintf(stderr, "[Odinagent.cc] Association response STA (%s) <---- AP (%s)\n", dst.unparse_colon().c_str(), src.unparse_colon().c_str());
 
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n\n");
+
+	}
   //Notify the master that a client has completed the auth/assoc procedure so it can stop the timer and prevent it from removing the lvap
   StringAccum sa;
   sa << "association " << dst.unparse_colon().c_str() << "\n";
@@ -2062,7 +2086,10 @@ void
 OdinAgent::print_stations_state()
 {
 	if (_debug_level % 10 > 0) {
-	  fprintf(stderr,"\n[Odinagent.cc] *** Periodic report ***\n");
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n");
+
+		fprintf(stderr,"[Odinagent.cc] ##### Periodic report #####\n");
 		fprintf(stderr,"[Odinagent.cc]    Number of stations associated = %lu:\n", _sta_mapping_table.size());
 		
 		if(_sta_mapping_table.size() != 0){
@@ -2083,7 +2110,7 @@ OdinAgent::print_stations_state()
 
 			//Print info from our stations
 			if(_sta_mapping_table.find(iter.key()) != _sta_mapping_table.end()){
-				fprintf(stderr,"[Odinagent.cc]                -> rate: %i\n", (iter.value()._rate));
+				fprintf(stderr,"[Odinagent.cc]                -> rate: %i (%i kbps)\n", iter.value()._rate,iter.value()._rate * 500 );
 				fprintf(stderr,"[Odinagent.cc]                -> noise: %i\n", (iter.value()._noise));
 				fprintf(stderr,"[Odinagent.cc]                -> signal: %i (%i dBm)\n", iter.value()._signal, iter.value()._signal - 256 ); // value - 256)
 				fprintf(stderr,"[Odinagent.cc]                -> packets: %i\n", (iter.value()._packets));
@@ -2091,6 +2118,8 @@ OdinAgent::print_stations_state()
 				}
 			}
 		}
+		if (_debug_level / 10 == 1)
+			fprintf(stderr, "##################################################################\n\n");
 	}
 }
 
