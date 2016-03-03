@@ -173,7 +173,8 @@ public:
   int _csa_count; // For _csa FALSE-->TRUE
   int _csa_count_default;
   Vector<Subscription> _subscription_list;
-  bool _debug;
+  //bool _debug;
+  int _debug_level;		//"0" no info displayed; "1" only basic info displayed; "2" all the info displayed; "1x" demo info displayed
   HashTable<EtherAddress, String> _packet_buffer;
   void match_against_subscriptions(StationStats stats, EtherAddress src);
 

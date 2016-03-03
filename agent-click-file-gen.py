@@ -13,10 +13,10 @@
 
 import sys
 
-if (len(sys.argv) != 10):
+if (len(sys.argv) != 11):
     print 'Usage:'
     print ''
-    print '%s <AP_CHANNEL> <QUEUE_SIZE> <MAC_ADDR_AP> <ODIN_MASTER_IP> <ODIN_MASTER_PORT> <DEBUGFS_FILE> <SSIDAGENT> <ODIN_AGENT_IP> <DEBUG_LEVEL>' %(sys.argv[0])
+    print '%s <AP_CHANNEL> <QUEUE_SIZE> <MAC_ADDR_AP> <ODIN_MASTER_IP> <ODIN_MASTER_PORT> <DEBUGFS_FILE> <SSIDAGENT> <ODIN_AGENT_IP> <DEBUG_CLICK> <DEBUG_ODIN>' %(sys.argv[0])
     print ''
     print 'AP_CHANNEL: it must be the same where mon0 of the AP is placed. To avoid problems at init time, it MUST be the same channel specified in the /etc/config/wireless file of the AP'
     print 'QUEUE_SIZE: you can use the size 50'
@@ -27,10 +27,11 @@ if (len(sys.argv) != 10):
     print '             it can be /sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra'
     print 'SSIDAGENT is the name of the SSID of this Odin agent'
     print 'ODIN_AGENT_IP is the IP address of the AP where this script is running (the IP used for communicating with the controller)'
-    print 'DEBUG_LEVEL: "0" no info displayed; "1" only basic info displayed; "2" all the info displayed'
+    print 'DEBUG_CLICK: "0" no info displayed; "1" only basic info displayed; "2" all the info displayed'
+    print 'DEBUG_ODIN: "0" no info displayed; "1" only basic info displayed; "2" all the info displayed; "1x" demo info displayed'
     print ''
     print 'Example:'
-    print '$ python %s X 50 XX:XX:XX:XX:XX:XX 192.168.1.X 2819 /sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra odin-unizar 192.168.1.Y L > agent.click' %(sys.argv[0])
+    print '$ python %s X 50 XX:XX:XX:XX:XX:XX 192.168.1.X 2819 /sys/kernel/debug/ieee80211/phy0/ath9k/bssid_extra odin-unizar 192.168.1.Y L M > agent.click' %(sys.argv[0])
     print ''
     print 'and then run the .click file you have generated'
     print 'click$ ./bin/click agent.click'
@@ -46,7 +47,8 @@ DEBUGFS_FILE = sys.argv[6]
 SSIDAGENT = sys.argv[7]
 DEFAULT_GW = sys.argv[8]			#the IP address of the Access Point.
 AP_UNIQUE_IP = sys.argv[8]			# IP address of the wlan0 interface of the router where Click runs (in monitor mode). It seems it does not matter.
-DEBUG_LEVEL = int(sys.argv[9])
+DEBUG_CLICK = int(sys.argv[9])
+DEBUG_ODIN = int(sys.argv[10])
 
 # Set the value of some constants
 NETWORK_INTERFACE_NAMES = "mon"		# beginning of the network interface names in monitor mode. e.g. mon
@@ -72,8 +74,8 @@ print '''
 
 print '''
 // call OdinAgent::configure to create and configure an Odin agent:
-odinagent::OdinAgent(HWADDR %s, RT rates, CHANNEL %s, DEFAULT_GW %s, DEBUGFS %s, SSIDAGENT %s)
-''' % (AP_UNIQUE_BSSID, AP_CHANNEL, DEFAULT_GW, DEBUGFS_FILE, SSIDAGENT )
+odinagent::OdinAgent(HWADDR %s, RT rates, CHANNEL %s, DEFAULT_GW %s, DEBUGFS %s, SSIDAGENT %s, DEBUG_ODIN %s)
+''' % (AP_UNIQUE_BSSID, AP_CHANNEL, DEFAULT_GW, DEBUGFS_FILE, SSIDAGENT, DEBUG_ODIN )
 
 print '''
 // send a ping to odinsocket every 2 seconds
@@ -120,12 +122,12 @@ FromHost(%s, HEADROOM 50)
 				// 20 means the 20th byte of the eth frame, i.e. the 6th byte of the ARP packet: 
 				// "Operation". It specifies the operation the sender is performing: 1 for request, 2 for reply.''' % (TAP_INTERFACE_NAME)
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> ARPPrint("[Click] ARP request from host to resolve STA's ARP")'''
 
 print '''  -> fh_arpr :: ARPResponder(%s %s) 	// looking for an STA's ARP: Resolve STA's ARP''' % (STA_IP, STA_MAC)
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> ARPPrint("[Click] Resolving client's ARP by myself")'''
 
 print '''  -> ToHost(%s)''' % (TAP_INTERFACE_NAME)
@@ -134,7 +136,7 @@ print '''
 // Anything from host that is not an ARP request goes to the input 1 of Odin Agent
 fhcl[1]'''
 
-if (DEBUG_LEVEL > 1):
+if (DEBUG_CLICK > 1):
     print '''  -> Print("[Click] Non-ARP request from host goes to Odin agent port 1")'''
 
 print '''  -> [1]odinagent
@@ -143,7 +145,7 @@ print '''  -> [1]odinagent
 print '''// Not looking for an STA's ARP? Then let it pass.
 fh_arpr[1]'''
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> Print("[Click] ARP request to another STA goes to Odin agent port 1")'''
 
 print '''  -> [1]odinagent'''
@@ -192,14 +194,14 @@ odinagent[1]
 				// 20 means the 20th byte of the eth frame, i.e. the 6th byte of the ARP packet: 
 				// "Operation". It specifies the operation the sender is performing: 1 for request'''
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> Print("[Click] ARP request from the STA") //debug level 1''' 
 
 print '''  -> arp_resp::ARPResponder (%s %s) // ARP fast path for STA
 									// the STA is asking for the MAC address of the AP
 									// add the IP of the AP and the BSSID of the LVAP corresponding to this STA''' % ( AP_UNIQUE_IP, AP_UNIQUE_BSSID )
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> Print("[Click] ARP fast path for STA: the STA is asking for the MAC address of the AP")'''
 
 print '''  -> [1]odinagent''' 
@@ -210,7 +212,7 @@ print '''
 // reflect datapath or learning switch will drop it
 arp_c[1]'''
 
-if (DEBUG_LEVEL > 1):
+if (DEBUG_CLICK > 1):
     print '''  -> Print("[Click] Non-ARP packet in arp_c classifier")''' 
 
 print '''  -> ToHost(%s)''' % ( TAP_INTERFACE_NAME )
@@ -222,7 +224,7 @@ print '''
 // to reflect datapath or learning switch will drop it
 arp_resp[1]'''
 
-if (DEBUG_LEVEL > 0):
+if (DEBUG_CLICK > 0):
     print '''  -> Print("[Click] ARP Fast path fail")''' 
 
 print '''  -> ToHost(%s)''' % ( TAP_INTERFACE_NAME )
