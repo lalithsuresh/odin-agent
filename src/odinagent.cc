@@ -2122,7 +2122,7 @@ OdinAgent::print_stations_state()
 		if (_debug_level / 10 == 1)
 			fprintf(stderr, "##################################################################\n");
 
-		fprintf(stderr,"[Odinagent.cc] ##### Periodic report. Number of stations associated: %lu\n", _sta_mapping_table.size());
+		fprintf(stderr,"[Odinagent.cc] ##### Periodic report. Number of stations associated: %i\n", _sta_mapping_table.size());
 		
 		if(_sta_mapping_table.size() != 0) {
 
