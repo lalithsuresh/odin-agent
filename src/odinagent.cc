@@ -2149,9 +2149,10 @@ OdinAgent::print_stations_state()
 					fprintf(stderr,"[Odinagent.cc]                -> last heard: %d.%06d \n", (iter.value()._last_received).sec(), (iter.value()._last_received).subsec());
 					fprintf(stderr,"[Odinagent.cc]\n");
 				}
+			}
+			if (_debug_level / 10 == 1)
+				fprintf(stderr, "##################################################################\n\n");
 		}
-		if (_debug_level / 10 == 1)
-			fprintf(stderr, "##################################################################\n\n");
 	}
 }
 
