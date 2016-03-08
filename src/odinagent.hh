@@ -79,11 +79,13 @@ public:
         String statistic;
         relation_t rel;
         double val;
+		Timestamp last_publish_sent; // Stores the timestamp when the last publish has been sent for a single subscription
   };
 
   // Methods to handle and send
   // 802.11 management messages
   void recv_probe_request (Packet *p);
+  void recv_deauth (Packet *p);
   void send_beacon (EtherAddress dst, EtherAddress bssid, String my_ssid, bool probe);
   void recv_assoc_request (Packet *p);
   void send_assoc_response (EtherAddress, uint16_t status, uint16_t associd);
@@ -100,9 +102,14 @@ public:
   int set_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress sta_bssid, Vector<String> vap_ssid);
   int remove_vap (EtherAddress sta_mac);
 
+  //debug
+  void print_stations_state();
+
+
   // Read/Write handlers
   static String read_handler(Element *e, void *user_data);
   static int write_handler(const String &str, Element *e, void *user_data, ErrorHandler *errh);
+
 
   // Extend this enum table to add
   // new handlers.
@@ -118,10 +125,11 @@ public:
     handler_subscriptions,
     handler_debug,
     handler_probe_response,
-    handler_probe_request, 
-    handler_report_mean, 
+    handler_probe_request,
+    handler_report_mean,
     handler_update_signal_strength,
     handler_signal_strength_offset,
+    handler_channel_switch_announcement,
   };
 
   // Rx-stats about stations
@@ -143,6 +151,7 @@ public:
   // a per client basis
   HashTable<EtherAddress, OdinStationState> _sta_mapping_table;
   HashTable<EtherAddress, Timestamp> _mean_table;
+  HashTable<EtherAddress, Timestamp> _station_subs_table; // Table storing the last time when a publish for an ETH address has been sent
 
   // For stat collection
   double _mean;
@@ -157,8 +166,15 @@ public:
 
   int _interval_ms; // Beacon interval: common between all VAPs for now
   int _channel; // Channel to be shared by all VAPs.
+  int _new_channel; // New channel for CSA
+  bool _csa; // For channel switch announcement
+  int _count_csa_beacon; // For channel switch announcement
+  int _count_csa_beacon_default; // Default number of beacons before channel switch
+  int _csa_count; // For _csa FALSE-->TRUE
+  int _csa_count_default;
   Vector<Subscription> _subscription_list;
-  bool _debug;
+  //bool _debug;
+  int _debug_level;		//"0" no info displayed; "1" only basic info displayed; "2" all the info displayed; "1x" demo info displayed
   HashTable<EtherAddress, String> _packet_buffer;
   void match_against_subscriptions(StationStats stats, EtherAddress src);
 
@@ -169,9 +185,11 @@ private:
   class AvailableRates *_rtable;
   int _associd;
   Timer _beacon_timer;
-  Timer _cleanup_timer;
+  Timer _clean_stats_timer;
+  Timer _general_timer;
   IPAddress _default_gw_addr;
   String _debugfs_string;
+  String _ssid_agent_string;	// stores the SSID of the agent
 };
 
 
