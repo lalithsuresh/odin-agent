@@ -41,7 +41,8 @@ int THRESHOLD_OLD_STATS = 30; //timer interval [sec] after which the stats of ol
 int RESCHEDULE_INTERVAL_GENERAL = 35; //time interval [sec] after which general_timer will be rescheduled
 int RESCHEDULE_INTERVAL_STATS = 60; //time interval [sec] after which general_timer will be rescheduled
 int THRESHOLD_REMOVE_LVAP = 80; //time interval [sec] after which an lvap will be removed if we didn't hear from the client
-int THRESHOLD_PUBLISH_SENT = 5; //time interval [sec] after which a publish message can be sent again
+double THRESHOLD_PUBLISH_SENT = 0.0; //time interval [sec] after which a publish message can be sent again
+int MULTICHANNEL_AGENTS = 0; //Odin environment with agents in several channels
 
 OdinAgent::OdinAgent()
 : _mean(0),
@@ -1426,6 +1427,38 @@ OdinAgent::push(int port, Packet *p)
         return;
       }
 
+			// Get the destination address
+			EtherAddress dst = EtherAddress(w->i_addr3);
+
+			// if the destination address is a known LVAP
+			if (_sta_mapping_table.find (dst) != _sta_mapping_table.end()) {
+
+				// Destination station is a Odin client
+				WritablePacket *p_out = 0;	// make the packet writable, to be sent to the network
+				p_out = p->uniqueify();
+				if (!p_out) {
+					return;
+				}
+		
+				// Wifi encapsulation
+				struct click_wifi *w_out = (struct click_wifi *) p_out->data();
+
+				memset(p_out->data(), 0, sizeof(click_wifi));
+				w_out->i_fc[0] = (uint8_t) (WIFI_FC0_VERSION_0 | WIFI_FC0_TYPE_DATA);
+				w_out->i_fc[1] = 0;
+				w_out->i_fc[1] |= (uint8_t) (WIFI_FC1_DIR_MASK & WIFI_FC1_DIR_FROMDS);
+				
+				// modify the MAC address fields of the Wi-Fi frame
+				OdinStationState oss = _sta_mapping_table.get (dst);
+				memcpy(w_out->i_addr1, dst.data(), 6);
+				memcpy(w_out->i_addr2, oss._vap_bssid.data(), 6);
+				memcpy(w_out->i_addr3, src.data(), 6);
+
+				// send the frame by the output number 2
+				output(2).push(p_out);
+				return;
+			}
+
       // There should be a WifiDecap element upstream.
       output(1).push(p);
       return;
@@ -1505,12 +1538,13 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
   if(_subscription_list.size() == 0)
     return;
 
-   // if the MAC is not in the mapping table, end the function
-  if (_sta_mapping_table.find (src) == _sta_mapping_table.end()) 
-         return;
-
-	if (_debug_level % 10 > 1)
-	  fprintf(stderr, "[Odinagent.cc] MAC %s is in the mapping table\n",src.unparse_colon().c_str());
+    if (MULTICHANNEL_AGENTS == 1) {
+       // if the MAC is not in the mapping table, end the function
+	   if (_sta_mapping_table.find (src) == _sta_mapping_table.end()) 
+		      return;
+	   if (_debug_level % 10 > 1)
+		      fprintf(stderr, "[Odinagent.cc] MAC %s is in the mapping table\n",src.unparse_colon().c_str());
+  }
 
   Timestamp now = Timestamp::now();
   Timestamp age;
@@ -1532,6 +1566,9 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
 	// First I check if the address of the arrived packet matches
     if (sub.sta_addr != EtherAddress() && sub.sta_addr != src)
       continue;
+
+	if (_debug_level % 10 > 1)
+		fprintf(stderr, "[Odinagent.cc]  MAC %s in subscription list\n",sub.sta_addr.unparse_colon().c_str());
 
     /* TODO: Refactor to use a series of hash maps instead */
     switch (sub.rel) {
@@ -1584,10 +1621,6 @@ OdinAgent::match_against_subscriptions(StationStats stats, EtherAddress src)
         break;
       }
     }
-
-
-	if (_debug_level % 10 > 1)
-		fprintf(stderr, "[Odinagent.cc]  MAC %s in subscription list\n",sub.sta_addr.unparse_colon().c_str());
 
 	if (matched) {
 			if (sub.sta_addr != EtherAddress()) {
@@ -2089,34 +2122,33 @@ OdinAgent::print_stations_state()
 		if (_debug_level / 10 == 1)
 			fprintf(stderr, "##################################################################\n");
 
-		fprintf(stderr,"[Odinagent.cc] ##### Periodic report #####\n");
-		fprintf(stderr,"[Odinagent.cc]    Number of stations associated = %lu:\n", _sta_mapping_table.size());
+		fprintf(stderr,"[Odinagent.cc] ##### Periodic report. Number of stations associated: %lu\n", _sta_mapping_table.size());
 		
-		if(_sta_mapping_table.size() != 0){
+		if(_sta_mapping_table.size() != 0) {
 
-		// For each VAP
-		for (HashTable<EtherAddress, OdinStationState>::iterator it
-			= _sta_mapping_table.begin(); it.live(); it++){
+			// Initialize the statistics
+			HashTable<EtherAddress, OdinAgent::StationStats>::const_iterator iter = _rx_stats.begin();
+			
+			// For each VAP
+			for (HashTable<EtherAddress, OdinStationState>::iterator it	= _sta_mapping_table.begin(); it.live(); it++) {
 
-			for (int i = 0; i < it.value()._vap_ssids.size (); i++) {
-				fprintf(stderr,"[Odinagent.cc]        Station -> BSSID: %s\n", (it.value()._vap_bssid).unparse_colon().c_str());
-				fprintf(stderr,"[Odinagent.cc]                -> IP addr: %s\n", it.value()._sta_ip_addr_v4.unparse().c_str());
-			}
-		}
+				// Each VAP may have a number of SSIDs
+				//for (int i = 0; i < it.value()._vap_ssids.size (); i++) {
+					fprintf(stderr,"[Odinagent.cc]        Station -> BSSID: %s\n", (it.value()._vap_bssid).unparse_colon().c_str());
+					fprintf(stderr,"[Odinagent.cc]                -> IP addr: %s\n", it.value()._sta_ip_addr_v4.unparse().c_str());
+				//}
 
-		//stats
-		for (HashTable<EtherAddress, OdinAgent::StationStats>::const_iterator iter = _rx_stats.begin();
-		iter.live(); iter++){
-
-			//Print info from our stations
-			if(_sta_mapping_table.find(iter.key()) != _sta_mapping_table.end()){
-				fprintf(stderr,"[Odinagent.cc]                -> rate: %i (%i kbps)\n", iter.value()._rate,iter.value()._rate * 500 );
-				fprintf(stderr,"[Odinagent.cc]                -> noise: %i\n", (iter.value()._noise));
-				fprintf(stderr,"[Odinagent.cc]                -> signal: %i (%i dBm)\n", iter.value()._signal, iter.value()._signal - 256 ); // value - 256)
-				fprintf(stderr,"[Odinagent.cc]                -> packets: %i\n", (iter.value()._packets));
-				fprintf(stderr,"[Odinagent.cc]                -> last heard: %d.%06d \n", (iter.value()._last_received).sec(), (iter.value()._last_received).subsec());
+				//stats
+				//Print info from our stations if available
+				HashTable<EtherAddress, OdinAgent::StationStats>::const_iterator iter = _rx_stats.find(it.key());
+				if (iter != _rx_stats.end()){
+					fprintf(stderr,"[Odinagent.cc]                -> rate: %i (%i kbps)\n", iter.value()._rate,iter.value()._rate * 500 );
+					fprintf(stderr,"[Odinagent.cc]                -> noise: %i\n", (iter.value()._noise));
+					fprintf(stderr,"[Odinagent.cc]                -> signal: %i (%i dBm)\n", iter.value()._signal, iter.value()._signal - 256 ); // value - 256)
+					fprintf(stderr,"[Odinagent.cc]                -> packets: %i\n", (iter.value()._packets));
+					fprintf(stderr,"[Odinagent.cc]                -> last heard: %d.%06d \n", (iter.value()._last_received).sec(), (iter.value()._last_received).subsec());
+					fprintf(stderr,"[Odinagent.cc]\n");
 				}
-			}
 		}
 		if (_debug_level / 10 == 1)
 			fprintf(stderr, "##################################################################\n\n");
