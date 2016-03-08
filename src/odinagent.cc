@@ -2150,9 +2150,9 @@ OdinAgent::print_stations_state()
 					fprintf(stderr,"[Odinagent.cc]\n");
 				}
 			}
-			if (_debug_level / 10 == 1)
+		}			
+		if (_debug_level / 10 == 1)
 				fprintf(stderr, "##################################################################\n\n");
-		}
 	}
 }
 
